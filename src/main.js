@@ -20,6 +20,8 @@ import { getBlockById, BLOCKS, ITEMS } from './core/blocks.js';
 import { buildChunkMesh } from './render/worldmesh.js';
 import { getAtlasTexture, tileUV, TILES } from './render/atlas.js';
 import { recipeBook } from './core/crafting.js';
+import { daylight, isNight, timeLabel, phase, nextDawn } from './core/daycycle.js';
+import { createLiving, eatSelected, tickMetabolism, applyDamage, trackFall, foodValue } from './core/living.js';
 
 // Recipe book UI (toggle with B)
 const recipePanel = document.getElementById('recipe-book');
@@ -94,10 +96,22 @@ function refreshHeldItem() {
 
 // ---------- inventory / hotbar (A4) ----------
 const inventory = createInventory(9);
-// Small starter kit so a tester can immediately place a few blocks.
+// Small starter kit so a tester can immediately place/survive.
 inventory.add(1, 8); // stone
 inventory.add(7, 8); // planks
+inventory.add(BLOCKS.bed.id, 1); // bed (place on solid ground; F to sleep at night)
+inventory.add(ITEMS.bread.id, 8); // food (RMB to eat when hungry)
 refreshHeldItem();
+
+// ---------- survival state (B2) ----------
+const living = createLiving();
+let difficulty = 'normal';
+let deaths = 0;
+let spawnPoint = { x: landSpawn.x, y: landSpawn.y, z: landSpawn.z };
+let worldTime = 0; // absolute sim ticks; tick 0 = 6:00 day 1
+let respawnTimer = 0;
+let sleepingMsg = null;
+let sleepMsgTimer = 0;
 
 // ---------- chunk streaming (A2) but meshed from the mutable world ----------
 const chunkMeshes = new Map(); // "cx,cz" -> THREE.Mesh
@@ -229,7 +243,7 @@ function shiftAndReload() {
 
 function isPlaceable(id) {
   const b = getBlockById(id);
-  return !!b && b.id !== 0 && b.solid && !b.liquid;
+  return !!b && b.id !== 0 && !b.liquid;
 }
 
 // Player AABB overlap check for the placement cell (must not embed the player).
@@ -252,11 +266,34 @@ function placeAt(hit) {
   const pz = hit.nz;
   const existing = world.get(px, py, pz);
   if (existing !== 0 || overlapsPlayer(px, py, pz)) return; // illegal: not air / inside player
+  const block = getBlockById(stack.id);
+  // non-solid blocks (e.g. bed) need a solid support beneath them.
+  if (!block.solid && !world.isSolid(px, py - 1, pz)) return;
   inventory.takeSelected(1);
   world.set(px, py, pz, stack.id);
   markEdited(px, py, pz);
-  hudState.textContent = `placed ${getBlockById(stack.id).name} @ ${px},${py},${pz}`;
+  hudState.textContent = `placed ${block.name} @ ${px},${py},${pz}`;
   shiftAndReload();
+}
+
+// ---------- survival helpers (B2): death / respawn / sleep ----------
+function respawn() {
+  Object.assign(living, createLiving());
+  deaths += 1;
+  player.pos.x = spawnPoint.x;
+  player.pos.y = spawnPoint.y;
+  player.pos.z = spawnPoint.z;
+  player.vel.y = 0;
+  sleepingMsg = 'You died — respawned at spawn point';
+  sleepMsgTimer = 3;
+}
+
+function sleepNow() {
+  if (!living.alive || !isNight(worldTime)) return;
+  spawnPoint = { x: target.x + 0.5, y: target.y + 1, z: target.z + 0.5 };
+  worldTime = nextDawn(worldTime);
+  sleepingMsg = 'Slept until dawn — spawn point set at bed';
+  sleepMsgTimer = 4;
 }
 
 // ---------- drops (A4) ----------
@@ -288,14 +325,13 @@ function renderDrops() {
 
 // ---------- input wiring (A4 additions on top of A3 movement input) ----------
 let lmb = false;
-let rmb = false;
+let useRequest = false;
 document.addEventListener('mousedown', (e) => {
   if (e.button === 0) lmb = true;
-  if (e.button === 2) rmb = true;
+  if (e.button === 2) useRequest = true;
 });
 document.addEventListener('mouseup', (e) => {
   if (e.button === 0) lmb = false;
-  if (e.button === 2) rmb = false;
 });
 document.addEventListener('contextmenu', (e) => e.preventDefault());
 
@@ -307,6 +343,10 @@ window.addEventListener('keydown', (e) => {
       inventory.select(n - 1);
       refreshHeldItem();
     }
+  }
+  // F = use: sleep on a targeted bed at night.
+  if (e.code === 'KeyF' && target && target.id === BLOCKS.bed.id) {
+    sleepNow();
   }
 });
 window.addEventListener('wheel', (e) => {
@@ -327,13 +367,12 @@ function buildHUD() {
   return { canvas, ctx: canvas.getContext('2d') };
 }
 const hud = buildHUD();
-const hudClock = new THREE.Clock();
-const DAY_OFFSET = 4000;
 
 function drawHUD() {
   const ctx = hud.ctx;
   const w = (hud.canvas.width = window.innerWidth);
   const h = (hud.canvas.height = window.innerHeight);
+  const night = isNight(worldTime);
 
   // Crosshair
   const cx = w / 2;
@@ -390,14 +429,72 @@ function drawHUD() {
   ctx.font = '15px system-ui';
   ctx.fillText(`selected: ${selName}${sel.count > 0 ? ` ×${sel.count}` : ''}`, 14, h - 14);
 
+  // Status bars (top-left): health, hunger, air.
+  const bX = 14;
+  const bW = 110;
+  const bH = 9;
+  const drawBar = (y, frac, color) => {
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(bX, y, bW, bH);
+    ctx.fillStyle = color;
+    ctx.fillRect(bX, y, Math.round(bW * Math.max(0, Math.min(1, frac))), bH);
+    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bX, y, bW, bH);
+  };
+  let bY = 16;
+  drawBar(bY, living.health / living.maxHealth, '#e03131');
+  ctx.fillStyle = '#fff';
+  ctx.font = '11px system-ui';
+  ctx.fillText(`HP ${Math.ceil(living.health)}/${living.maxHealth}${living.alive ? '' : ' (dead)'}`, bX + bW + 8, bY + 9);
+  bY += bH + 5;
+  drawBar(bY, living.hunger / living.maxHunger, '#d9923a');
+  ctx.fillText(`Hunger ${Math.floor(living.hunger)}`, bX + bW + 8, bY + 9);
+  if (living.air < living.maxAir) {
+    bY += bH + 5;
+    drawBar(bY, living.air / living.maxAir, '#4dabf7');
+    ctx.fillText('Oxygen', bX + bW + 8, bY + 9);
+  }
+
+  // Time / phase / difficulty (top-right).
+  ctx.textAlign = 'right';
+  ctx.fillStyle = 'rgba(255,255,255,0.95)';
+  ctx.font = 'bold 15px system-ui';
+  ctx.fillText(`${timeLabel(worldTime)} · ${night ? 'NIGHT' : phase(worldTime).toUpperCase()}`, w - 14, 22);
+  ctx.font = '12px system-ui';
+  ctx.fillStyle = night ? 'rgba(255,150,120,0.95)' : 'rgba(255,255,255,0.85)';
+  ctx.fillText(`difficulty ${difficulty}${night ? ' · hostiles active' : ''}`, w - 14, 38);
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.fillText(`spawn ${Math.round(spawnPoint.x)},${Math.round(spawnPoint.y)},${Math.round(spawnPoint.z)} · deaths ${deaths}`, w - 14, 54);
+
   // Targeting hints
   if (target) {
     ctx.fillStyle = 'rgba(255,255,255,0.85)';
     ctx.fillText(`target ${getBlockById(target.id).name}${Math.abs(breakingFraction) > 0.02 ? ` · breaking ${Math.round(breakingFraction * 100)}%` : ''}`, 14, h - 90);
   }
   if (!input.isLocked()) {
-    ctx.fillText('click to capture mouse · LMB mine · RMB place · 1-9/wheel select', w / 2, h - 14);
+    ctx.fillText('click to capture mouse · LMB mine · RMB eat/place · 1-9/wheel select · F sleep on bed', w / 2, h - 14);
     ctx.textAlign = 'center';
+  }
+
+  // Sleep / respawn banner.
+  if (sleepMsgTimer > 0 && sleepingMsg) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    ctx.font = 'bold 18px system-ui';
+    ctx.fillText(sleepingMsg, w / 2, h * 0.3);
+  }
+
+  // Death overlay.
+  if (!living.alive) {
+    ctx.fillStyle = 'rgba(120,10,10,0.55)';
+    ctx.fillRect(0, 0, w, h);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 34px system-ui';
+    ctx.fillText('You Died', w / 2, h / 2 - 20);
+    ctx.font = '16px system-ui';
+    ctx.fillText('Respawning…', w / 2, h / 2 + 12);
   }
 }
 
@@ -422,6 +519,20 @@ function animate() {
   // Physics (A3) — WorldState collider includes player edits.
   loop(dt);
   syncCamera(camera, player);
+
+  // --- B2 survival: world time + metabolism ---
+  worldTime += dt * WORLD.tickRateHz;
+  const metaEvents = tickMetabolism(living, dt, { difficulty, underwater: player.inWater });
+  for (const ev of metaEvents) applyDamage(living, ev.amount, { type: ev.type, difficulty });
+  applyDamage(living, trackFall(living, dt, { airborne: !player.onGround, fallingSpeed: player.vel.y }), { type: 'environment' });
+
+  // Death / respawn after a short delay.
+  if (!living.alive && respawnTimer <= 0) respawnTimer = 3.0;
+  if (!living.alive && respawnTimer > 0) {
+    respawnTimer -= dt;
+    if (respawnTimer <= 0) respawn();
+  }
+  if (sleepMsgTimer > 0) sleepMsgTimer -= dt;
 
   // Stream + rebuild chunks.
   updateChunks(player.pos);
@@ -449,9 +560,15 @@ function animate() {
   }
   breakingFraction = breaking.progressOf(target);
 
-  // Placement (RMB).
-  if (target && rmb && !lmb && input.isLocked()) {
-    placeAt(target);
+  // Use / interact (RMB): eat food if the selected slot is food, else place.
+  if (useRequest && !lmb && input.isLocked()) {
+    useRequest = false;
+    const sel = inventory.selectedStack();
+    if (foodValue(sel.id) > 0 && living.hunger < living.maxHunger) {
+      if (eatSelected(living, inventory)) refreshHeldItem();
+    } else if (target) {
+      placeAt(target);
+    }
   }
 
   // Drops: physics + pickup into inventory.
@@ -466,12 +583,20 @@ function animate() {
   }
   renderDrops();
 
-  // Sky tint + fog follow the solar clock (A2).
-  const t = now / 1000 * 20;
-  const tod = (t + DAY_OFFSET) % WORLD.dayLengthTicks;
-  const dayFrac = Math.sin((tod / WORLD.dayLengthTicks) * Math.PI * 2 - Math.PI / 2);
-  const blend = Math.min(1, Math.max(0, (dayFrac + 1) / 2));
-  const sky = new THREE.Color().lerpColors(new THREE.Color(0x0b1026), new THREE.Color(0x87b5d9), blend);
+  // --- day/night lighting (B2): sun + ambient follow the solar clock ---
+  const day = daylight(worldTime);
+  const night = isNight(worldTime);
+  sun.intensity = 0.12 + day * 0.95;
+  light.intensity = 0.28 + day * 0.62;
+  const ang = (worldTime / WORLD.dayLengthTicks) * Math.PI * 2;
+  sun.position.set(Math.cos(ang) * 40, Math.sin(ang) * 50 + 12, 20);
+  const skyDay = new THREE.Color(0x87b5d9);
+  const skyNight = new THREE.Color(0x070b1a);
+  const skyDawn = new THREE.Color(0xc98a5a);
+  let sky;
+  if (day < 0.15) sky = skyNight.clone().lerp(skyDay, day / 0.15);
+  else if (day < 0.55) sky = skyDawn.clone().lerp(skyDay, (day - 0.15) / 0.4);
+  else sky = skyDay.clone().lerp(skyNight, (day - 0.55) / 0.45);
   scene.background.copy(sky);
   scene.fog.color.copy(sky);
 
@@ -482,7 +607,8 @@ function animate() {
   if (elapsed >= 1) {
     hudState.textContent =
       `seed=${seed} · ${chunkMeshes.size} chunks · ${renderer.info.render.triangles} tris · ` +
-      `inv ${inventory.total()} items · ${drops.filter((d) => d.alive).length} drops`;
+      `HP ${Math.ceil(living.health)}/${living.maxHealth} · hunger ${Math.floor(living.hunger)} · ` +
+      `${timeLabel(worldTime)} (${isNight(worldTime) ? 'night' : phase(worldTime)})`;
     elapsed = 0;
   }
 }
@@ -492,4 +618,4 @@ animate();
 window.addEventListener('keydown', (e) => { if (e.code === 'KeyB') recipePanel.hidden = !recipePanel.hidden; });
 
 hudState.textContent =
-  `seed=${seed} · click to capture mouse · LMB mine · RMB place · 1-9/wheel select · B recipes`;
+  `seed=${seed} · generating world… · click to capture mouse · LMB mine · RMB eat/place · 1-9/wheel select · F sleep on bed · B recipes`;
