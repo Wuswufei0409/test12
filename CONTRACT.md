@@ -153,3 +153,32 @@ in `src/core/*`) rather than living only in one agent's private memory.
 - **Integration**: `src/main.js` wires A2 chunk streaming + A3 player loop + A4
   mechanics; mined/placed chunks (3x3 neighbourhood) rebuild their mesh from
   `WorldState` (`src/render/worldmesh.js`).
+
+## 10. Survival & day/night (added B2)
+
+- **Stats** (`src/core/living.js`): `health`/`hunger`/`saturation` (20/20/5),
+  `air` (10s oxygen). Damage is applied via `applyDamage(living, amount,
+  {type, difficulty})`; `type:'hostile'` scales by `DIFFICULTY.damageScale`
+  (peaceful→0, easy→0.5, normal→1), while `type:'environment'` (fall, drown,
+  starve) is always full. Falling below 0 HP sets `alive=false` (death → respawn
+  after a short delay at the spawn point).
+- **Hunger & food**: hunger drains ~1 point per 30 sim-seconds (saturation
+  absorbs first). Food items (`.food` in the item registry: bread +5, apple +4)
+  restore hunger via `eatSelected`; well-fed players regenerate 1 HP/4s;
+  starvation (hunger 0) deals 1 environmental HP/4s.
+- **Drowning**: head underwater depletes the `air` bar (10s); when empty, 1 HP
+  per second. Air refills twice as fast when surfaced.
+- **Fall damage**: falling more than `fallDamageThreshold = 3` blocks deals
+  `floor(distance - 3)` environmental damage on landing (`trackFall`).
+- **Day/night cycle** (`src/core/daycycle.js`): one day = 24000 ticks; tick 0 =
+  6:00, noon 6000, dusk 12000+ (night 12000–23000, daytime undead/mob hooks).
+  `daylight(tick)` smooth 0..1 drives sun/ambient/sky; `nextDawn` skips to the
+  next 6:00. Difficulty and day phase are read-only today (no hostile mobs in
+  B2 — that is a later issue); `hostiles` become eligible at night.
+- **Sleep / spawn**: a placed **bed** (block id 18) on a solid support; pressing
+  `F` on it at night skips to `nextDawn` and resets the player's respawn point to
+  the bed. Respawning returns the player to the current spawn point at full
+  health/hunger; deaths are counted.
+- **HUD**: health/hunger/oxygen bars, day+phase+difficulty readout, death
+  overlay + respawn banner; RMB eats food when the selected slot is edible,
+  else places.
