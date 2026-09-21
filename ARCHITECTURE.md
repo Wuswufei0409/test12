@@ -34,13 +34,20 @@ src/core/targeting.js   DDA voxel raycast (crosshair target + place cell)
 src/core/breaking.js    hardness-based break time + progress
 src/core/inventory.js   9-slot hotbar with stacking + selection
 src/core/drops.js       block->item drop table + drop physics + pickup
+src/core/daycycle.js    day/night cycle: daylight, isNight, phase, nextDawn
+src/core/living.js      survival: health/hunger/damage/food/drowning/fall/death
+src/core/mobs.js        land mobs: spawn/wander-chase/attack-flee/hurt/death/drops (B3)
+src/core/explosion.js   creeper explosion: carve world sphere + drop collection (B3)
+src/core/combat.js      combat gear: melee/bow/armor/durability, knockback, cooldown (B3)
 ```
 
 - `main.js` is the only browser-coupled module: sets up the Three.js scene,
   streams chunks around the player (load/unload by view distance), renders sky
   + fog, runs the A3 player physics loop, and draws the crosshair/hotbar/HUD
   overlay. It also wires A4 mining/placing/drop-pickup against the shared
-  `WorldState`. It consumes `src/core/*` and `src/render/*`.
+  `WorldState`, and B2 survival (health/hunger/damage/death/respawn), the
+  day/night light cycle and bed sleep against `daycycle`/`living`. It consumes
+  `src/core/*` and `src/render/*`.
 - Chunk meshing reads the precomputed chunk array (A2 `chunkmesh`) for pure
   generation; `worldmesh` reads the mutable `WorldState` so mined/placed blocks
   appear once the 3x3 chunk neighbourhood is rebuilt. Both sample neighbours

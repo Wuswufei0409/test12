@@ -17,9 +17,18 @@ import { Breaking } from './core/breaking.js';
 import { createInventory, itemName, stackCapacity } from './core/inventory.js';
 import { dropForBlock, createDrop, stepDrop, canPickup } from './core/drops.js';
 import { getBlockById, BLOCKS, ITEMS } from './core/blocks.js';
+import { isHoeItem } from './core/items.js';
+import {
+  cropForSeed, cropOfBlock, stageBlockId, harvestDrops, tickCrops, isFarmland, maxStage,
+} from './core/farming.js';
 import { buildChunkMesh } from './render/worldmesh.js';
 import { getAtlasTexture, tileUV, TILES } from './render/atlas.js';
 import { recipeBook } from './core/crafting.js';
+import { daylight, isNight, timeLabel, phase, nextDawn } from './core/daycycle.js';
+import { createLiving, eatSelected, tickMetabolism, applyDamage, trackFall, foodValue } from './core/living.js';
+import { MOBS, createMob, stepMob, damageMob, mobDrops, groundHeight, MOB_HEIGHT } from './core/mobs.js';
+import { explode } from './core/explosion.js';
+import { weaponStats, resolveMelee, armorReduction, armorSlot, COMBAT } from './core/combat.js';
 
 // Recipe book UI (toggle with B)
 const recipePanel = document.getElementById('recipe-book');
@@ -94,10 +103,195 @@ function refreshHeldItem() {
 
 // ---------- inventory / hotbar (A4) ----------
 const inventory = createInventory(9);
-// Small starter kit so a tester can immediately place a few blocks.
+// Small starter kit so a tester can immediately place/survive.
 inventory.add(1, 8); // stone
 inventory.add(7, 8); // planks
+inventory.add(BLOCKS.bed.id, 1); // bed (place on solid ground; F to sleep at night)
+inventory.add(ITEMS.bread.id, 8); // food (RMB to eat when hungry)
+// B4: a hoe + seeds so farming is immediately testable in a fresh world.
+inventory.add(216, 1); // wooden_hoe
+inventory.add(220, 12); // wheat_seeds
+inventory.add(221, 4); // carrot (plantable + edible)
+inventory.add(222, 4); // potato (plantable + edible)
 refreshHeldItem();
+
+// ---------- survival state (B2) ----------
+const living = createLiving();
+let difficulty = 'normal';
+let deaths = 0;
+let spawnPoint = { x: landSpawn.x, y: landSpawn.y, z: landSpawn.z };
+let worldTime = 0; // absolute sim ticks; tick 0 = 6:00 day 1
+let respawnTimer = 0;
+let sleepingMsg = null;
+let sleepMsgTimer = 0;
+
+// ---------- mobs + combat (B3) ----------
+const mobs = [];
+const PASSIVE_TYPES = ['pig', 'cow', 'sheep', 'chicken'];
+const HOSTILE_TYPES = ['zombie', 'spider', 'creeper'];
+let mobTimer = 0;       // spawn / upkeep accumulator (ticks)
+const MAX_MOBS = 40;
+let meleeCooldown = 0;  // ticks until next swing
+let equipped = [];      // armor item ids currently worn
+let hitFeedback = null; // {amount, time} rendered for a short while
+let hitFeedbackTimer = 0;
+
+const mobGeo = new THREE.BoxGeometry(0.6, 0.9, 0.6);
+const mobMatCache = new Map();
+function mobMaterial(color) {
+  if (!mobMatCache.has(color)) mobMatCache.set(color, new THREE.MeshLambertMaterial({ color }));
+  return mobMatCache.get(color);
+}
+const mobMeshes = new Map(); // mob -> Mesh
+function renderMobs() {
+  // remove meshes for dead/despawned mobs
+  for (const [m, mesh] of mobMeshes) {
+    if (!m.alive) { scene.remove(mesh); mobMeshes.delete(m); }
+  }
+  for (const m of mobs) {
+    if (!m.alive) continue;
+    let mesh = mobMeshes.get(m);
+    if (!mesh) {
+      mesh = new THREE.Mesh(mobGeo, mobMaterial(MOBS[m.type].color));
+      scene.add(mesh);
+      mobMeshes.set(m, mesh);
+    }
+    mesh.position.set(m.x, m.y + MOB_HEIGHT * 0.4, m.z);
+    // creeper flashes as it fuses
+    if (m.type === 'creeper' && m.fuse > 0) {
+      mesh.material.color.set(Math.floor(m.fuse) % 2 === 0 ? 0xffffff : 0x4a9a3c);
+    } else {
+      mesh.material.color.set(MOBS[m.type].color);
+    }
+    mesh.visible = true;
+  }
+}
+
+// Spawn a mob near a ground position if within loaded chunks and under cap.
+function trySpawnMob() {
+  if (mobs.length >= MAX_MOBS) return;
+  const angle = Math.random() * Math.PI * 2;
+  const dist = 14 + Math.random() * 22;
+  const gx = player.pos.x + Math.cos(angle) * dist;
+  const gz = player.pos.z + Math.sin(angle) * dist;
+  const gy = groundHeight(world, gx, gz);
+  const type = pickMobType();
+  const m = createMob(type, gx, gy, gz);
+  mobs.push(m);
+}
+function pickMobType() {
+  const night = isNight(worldTime);
+  const pool = [...PASSIVE_TYPES];
+  if (difficulty !== 'peaceful' && night) pool.push(...HOSTILE_TYPES);
+  else if (difficulty !== 'peaceful' && Math.random() < 0.25) pool.push(...HOSTILE_TYPES); // some daytime hostiles
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+// Player attacks the mob the crosshair would hit (nearest mob along aim within a cone/range).
+function aimedMob() {
+  const dir = cameraDirection(player.yaw, player.pitch);
+  const eye = { x: player.pos.x, y: player.pos.y + P.eyeHeight, z: player.pos.z };
+  let best = null, bestT = Infinity;
+  for (const m of mobs) {
+    if (!m.alive) continue;
+    const mx = m.x, my = m.y + MOB_HEIGHT * 0.5, mz = m.z;
+    const ox = mx - eye.x, oy = my - eye.y, oz = mz - eye.z;
+    const t = ox * dir.x + oy * dir.y + oz * dir.z;
+    if (t < 0 || t > 6) continue;
+    const closest = Math.hypot(ox - dir.x * t, oy - dir.y * t, oz - dir.z * t);
+    if (closest < 0.9 && t < bestT) { best = m; bestT = t; }
+  }
+  return best;
+}
+
+function meleeSwing(m) {
+  const sel = inventory.selectedStack();
+  const stats = weaponStats(sel.count > 0 ? sel.id : null);
+  const res = resolveMelee(player, m, sel.count > 0 ? sel.id : null, meleeCooldown, equipped);
+  if (res === null) return; // on cooldown
+  if (!res.hit) return; // out of range / miss
+  const dm = damageMob(m, res.damage, res.knockback);
+  meleeCooldown = res.feedback.cooldown;
+  hitFeedback = res.feedback;
+  hitFeedbackTimer = 20;
+  if (dm.killed) killMob(m);
+  // durability: swords wear down; break removes item (hand stays)
+  if (sel.count > 0 && weaponStats(sel.id) !== COMBAT.HAND_DAMAGE) {
+    const wd = (stackDurability.get(sel) || 60) - 1;
+    stackDurability.set(sel, wd);
+    if (wd <= 0) { inventory.takeSelected(1); refreshHeldItem(); }
+  }
+}
+
+const stackDurability = new Map(); // inventory stack -> remaining durability
+
+// --- bow / arrows (crit 12 ranged combat) ---
+const arrows = []; // {x,y,z, vx,vy,vz, age, alive}
+const arrowGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.5, 6);
+const arrowMat = new THREE.MeshLambertMaterial({ color: 0xd8d8d8 });
+const arrowMeshes = new Map();
+const ARROW_SPEED = 34;
+const ARROW_LIFE = 3.5; // seconds before despawn
+
+function fireBow() {
+  const sel = inventory.selectedStack();
+  if (sel.id !== ITEMS.bow?.id && sel.id !== 103) return; // only bow fires
+  if (sel.count <= 0) return;
+  const dir = cameraDirection(player.yaw, player.pitch);
+  const eye = { x: player.pos.x, y: player.pos.y + P.eyeHeight, z: player.pos.z };
+  arrows.push({
+    x: eye.x + dir.x * 0.4, y: eye.y + dir.y * 0.4, z: eye.z + dir.z * 0.4,
+    vx: dir.x * ARROW_SPEED, vy: dir.y * ARROW_SPEED, vz: dir.z * ARROW_SPEED,
+    age: 0, alive: true,
+  });
+  // needs an arrow in the inventory too; else just visual shot without consume
+  for (let i = 0; i < inventory.stacks.length; i++) {
+    if (inventory.stacks[i].id === 104 && inventory.stacks[i].count > 0) {
+      inventory.stacks[i].count -= 1;
+      break;
+    }
+  }
+  refreshHeldItem();
+}
+
+function stepArrows(dt) {
+  for (const a of arrows) {
+    a.age += dt;
+    if (a.age > ARROW_LIFE) { a.alive = false; continue; }
+    a.x += a.vx * dt; a.y += a.vy * dt; a.z += a.vz * dt;
+    // hit a mob
+    for (const m of mobs) {
+      if (!m.alive) continue;
+      const dx = m.x - a.x, dy = (m.y + MOB_HEIGHT * 0.5) - a.y, dz = m.z - a.z;
+      if (Math.hypot(dx, dy, dz) < 0.7) {
+        const dm = damageMob(m, COMBAT.BOW_DAMAGE, { x: a.vx * 0.02, z: a.vz * 0.02 });
+        hitFeedback = { amount: COMBAT.BOW_DAMAGE }; hitFeedbackTimer = 20;
+        a.alive = false;
+        if (dm.killed) killMob(m);
+        break;
+      }
+    }
+    // hit a solid block (rough surface check)
+    if (world.isSolid(Math.floor(a.x), Math.floor(a.y), Math.floor(a.z))) a.alive = false;
+  }
+  // cull dead arrows + render
+  for (let i = arrows.length - 1; i >= 0; i--) { if (!arrows[i].alive) arrows.splice(i, 1); }
+  for (const [a, mesh] of arrowMeshes) { if (!a.alive) { scene.remove(mesh); arrowMeshes.delete(a); } }
+  for (const a of arrows) {
+    let mesh = arrowMeshes.get(a);
+    if (!mesh) { mesh = new THREE.Mesh(arrowGeo, arrowMat); scene.add(mesh); arrowMeshes.set(a, mesh); }
+    mesh.position.set(a.x, a.y, a.z);
+    mesh.lookAt(a.x + a.vx, a.y + a.vy, a.z + a.vz);
+  }
+}
+
+function killMob(m) {
+  const ds = mobDrops(m);
+  for (const d of ds) {
+    const drop = createDrop(m.x, m.y + 0.4, m.z, d.id, d.count);
+    drops.push(drop);
+  }
+}
 
 // ---------- chunk streaming (A2) but meshed from the mutable world ----------
 const chunkMeshes = new Map(); // "cx,cz" -> THREE.Mesh
@@ -210,9 +404,26 @@ function aim() {
 // ---------- mining / placement (A4) ----------
 const breaking = new Breaking();
 let breakingFraction = 0; // per-frame smoothed progress for the HUD/overlay
+let prevLmb = false;
+// Tracked crops: coordKey("x,y,z") -> { type, age (sim seconds) }.
+const crops = new Map();
 let mining = false;
 let placing = false;
 function breakAt(hit) {
+  // B4: harvesting a crop spawns the proper drops (mature vs immature).
+  const crop = cropOfBlock(hit.id);
+  if (crop) {
+    const key = WorldState.key(hit.x, hit.y, hit.z);
+    const mature = crop.stage === maxStage(crop.type);
+    world.set(hit.x, hit.y, hit.z, 0);
+    markEdited(hit.x, hit.y, hit.z);
+    crops.delete(key);
+    for (const it of harvestDrops(crop.type, mature)) {
+      drops.push(createDrop(hit.x, hit.y, hit.z, it.itemId, it.count));
+    }
+    hudState.textContent = `harvested ${crop.type} @ ${hit.x},${hit.y},${hit.z}`;
+    return;
+  }
   const dropId = dropForBlock(hit.id);
   world.set(hit.x, hit.y, hit.z, 0);
   markEdited(hit.x, hit.y, hit.z);
@@ -229,7 +440,7 @@ function shiftAndReload() {
 
 function isPlaceable(id) {
   const b = getBlockById(id);
-  return !!b && b.id !== 0 && b.solid && !b.liquid;
+  return !!b && b.id !== 0 && !b.liquid;
 }
 
 // Player AABB overlap check for the placement cell (must not embed the player).
@@ -252,12 +463,72 @@ function placeAt(hit) {
   const pz = hit.nz;
   const existing = world.get(px, py, pz);
   if (existing !== 0 || overlapsPlayer(px, py, pz)) return; // illegal: not air / inside player
+  const block = getBlockById(stack.id);
+  // non-solid blocks (e.g. bed) need a solid support beneath them.
+  if (!block.solid && !world.isSolid(px, py - 1, pz)) return;
   inventory.takeSelected(1);
   world.set(px, py, pz, stack.id);
   markEdited(px, py, pz);
-  hudState.textContent = `placed ${getBlockById(stack.id).name} @ ${px},${py},${pz}`;
+  hudState.textContent = `placed ${block.name} @ ${px},${py},${pz}`;
   shiftAndReload();
 }
+
+// ---------- survival helpers (B2): death / respawn / sleep ----------
+function respawn() {
+  Object.assign(living, createLiving());
+  deaths += 1;
+  player.pos.x = spawnPoint.x;
+  player.pos.y = spawnPoint.y;
+  player.pos.z = spawnPoint.z;
+  player.vel.y = 0;
+  sleepingMsg = 'You died — respawned at spawn point';
+  sleepMsgTimer = 3;
+}
+
+function sleepNow() {
+  if (!living.alive || !isNight(worldTime)) return;
+  spawnPoint = { x: target.x + 0.5, y: target.y + 1, z: target.z + 0.5 };
+  worldTime = nextDawn(worldTime);
+  sleepingMsg = 'Slept until dawn — spawn point set at bed';
+  sleepMsgTimer = 4;
+}
+
+// B4 farming interactions with the selected item: till dirt with a hoe, or
+// plant a seed on an existing farmland block. Returns true when handled.
+function useSelected(hit) {
+  const sel = inventory.selectedStack();
+  if (sel.count <= 0) return false;
+
+  // (1) Till dirt/grass into farmland with a hoe.
+  if (isHoeItem(sel.id) && (hit.id === BLOCKS.dirt.id || hit.id === BLOCKS.grass.id) && !overlapsPlayer(hit.x, hit.y, hit.z)) {
+    inventory.takeSelected(1); // consume hoe durability per use (kept simple)
+    inventory.add(sel.id, 1); // restore: hoes are not consumed on till
+    world.set(hit.x, hit.y, hit.z, 36); // farmland
+    markEdited(hit.x, hit.y, hit.z);
+    hudState.textContent = `tilled farmland @ ${hit.x},${hit.y},${hit.z}`;
+    return true;
+  }
+
+  // (2) Plant a seed on a farmland block (grows into the cell above).
+  const cropType = cropForSeed(sel.id);
+  if (cropType && isFarmland(hit.id)) {
+    const ax = hit.x;
+    const ay = hit.y + 1;
+    const az = hit.z;
+    if (world.get(ax, ay, az) === 0 && !overlapsPlayer(ax, ay, az)) {
+      inventory.takeSelected(1);
+      world.set(ax, ay, az, stageBlockId(cropType, 0));
+      markEdited(ax, ay, az);
+      crops.set(WorldState.key(ax, ay, az), { type: cropType, age: 0 });
+      hudState.textContent = `planted ${cropType} @ ${ax},${ay},${az}`;
+      shiftAndReload();
+      return true;
+    }
+  }
+
+  return false; // fall through to normal placement
+}
+
 
 // ---------- drops (A4) ----------
 const drops = [];
@@ -288,14 +559,13 @@ function renderDrops() {
 
 // ---------- input wiring (A4 additions on top of A3 movement input) ----------
 let lmb = false;
-let rmb = false;
+let useRequest = false;
 document.addEventListener('mousedown', (e) => {
   if (e.button === 0) lmb = true;
-  if (e.button === 2) rmb = true;
+  if (e.button === 2) useRequest = true;
 });
 document.addEventListener('mouseup', (e) => {
   if (e.button === 0) lmb = false;
-  if (e.button === 2) rmb = false;
 });
 document.addEventListener('contextmenu', (e) => e.preventDefault());
 
@@ -305,6 +575,21 @@ window.addEventListener('keydown', (e) => {
     const n = Number(e.code.slice(5));
     if (n >= 1 && n <= inventory.size) {
       inventory.select(n - 1);
+      refreshHeldItem();
+    }
+  }
+  // F = use: sleep on a targeted bed at night.
+  if (e.code === 'KeyF' && target && target.id === BLOCKS.bed.id) {
+    sleepNow();
+  }
+  // G = equip/unequip selected armor piece.
+  if (e.code === 'KeyG') {
+    const sel = inventory.selectedStack();
+    const slot = sel.count > 0 ? armorSlot(sel.id) : null;
+    if (slot) {
+      equipped = equipped.filter((id) => armorSlot(id) !== slot);
+      equipped.push(sel.id);
+      inventory.takeSelected(1);
       refreshHeldItem();
     }
   }
@@ -327,13 +612,12 @@ function buildHUD() {
   return { canvas, ctx: canvas.getContext('2d') };
 }
 const hud = buildHUD();
-const hudClock = new THREE.Clock();
-const DAY_OFFSET = 4000;
 
 function drawHUD() {
   const ctx = hud.ctx;
   const w = (hud.canvas.width = window.innerWidth);
   const h = (hud.canvas.height = window.innerHeight);
+  const night = isNight(worldTime);
 
   // Crosshair
   const cx = w / 2;
@@ -390,14 +674,85 @@ function drawHUD() {
   ctx.font = '15px system-ui';
   ctx.fillText(`selected: ${selName}${sel.count > 0 ? ` ×${sel.count}` : ''}`, 14, h - 14);
 
+  // Status bars (top-left): health, hunger, air.
+  const bX = 14;
+  const bW = 110;
+  const bH = 9;
+  const drawBar = (y, frac, color) => {
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(bX, y, bW, bH);
+    ctx.fillStyle = color;
+    ctx.fillRect(bX, y, Math.round(bW * Math.max(0, Math.min(1, frac))), bH);
+    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bX, y, bW, bH);
+  };
+  let bY = 16;
+  drawBar(bY, living.health / living.maxHealth, '#e03131');
+  ctx.fillStyle = '#fff';
+  ctx.font = '11px system-ui';
+  ctx.fillText(`HP ${Math.ceil(living.health)}/${living.maxHealth}${living.alive ? '' : ' (dead)'}`, bX + bW + 8, bY + 9);
+  bY += bH + 5;
+  drawBar(bY, living.hunger / living.maxHunger, '#d9923a');
+  ctx.fillText(`Hunger ${Math.floor(living.hunger)}`, bX + bW + 8, bY + 9);
+  if (living.air < living.maxAir) {
+    bY += bH + 5;
+    drawBar(bY, living.air / living.maxAir, '#4dabf7');
+    ctx.fillText('Oxygen', bX + bW + 8, bY + 9);
+  }
+  // Armor bar (B3): total armor points from equipped pieces.
+  if (equipped.length > 0) {
+    const pts = equipped.reduce((n, id) => n + (COMBAT.ARMOR[id] ? COMBAT.ARMOR[id].armorPoints : 0), 0);
+    bY += bH + 5;
+    drawBar(bY, Math.min(1, pts / 20), '#a678d8');
+    ctx.fillText(`Armor ${pts}`, bX + bW + 8, bY + 9);
+  }
+  // Hit feedback (B3): brief damage amount flash when landing a swing.
+  if (hitFeedbackTimer > 0 && hitFeedback) {
+    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    ctx.font = 'bold 20px system-ui';
+    ctx.fillText(`-${hitFeedback.amount}`, w / 2 + 24, h / 2 - 10);
+  }
+
+  // Time / phase / difficulty (top-right).
+  ctx.textAlign = 'right';
+  ctx.fillStyle = 'rgba(255,255,255,0.95)';
+  ctx.font = 'bold 15px system-ui';
+  ctx.fillText(`${timeLabel(worldTime)} · ${night ? 'NIGHT' : phase(worldTime).toUpperCase()}`, w - 14, 22);
+  ctx.font = '12px system-ui';
+  ctx.fillStyle = night ? 'rgba(255,150,120,0.95)' : 'rgba(255,255,255,0.85)';
+  ctx.fillText(`difficulty ${difficulty}${night ? ' · hostiles active' : ''}`, w - 14, 38);
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.fillText(`spawn ${Math.round(spawnPoint.x)},${Math.round(spawnPoint.y)},${Math.round(spawnPoint.z)} · deaths ${deaths}`, w - 14, 54);
+
   // Targeting hints
   if (target) {
     ctx.fillStyle = 'rgba(255,255,255,0.85)';
     ctx.fillText(`target ${getBlockById(target.id).name}${Math.abs(breakingFraction) > 0.02 ? ` · breaking ${Math.round(breakingFraction * 100)}%` : ''}`, 14, h - 90);
   }
   if (!input.isLocked()) {
-    ctx.fillText('click to capture mouse · LMB mine · RMB place · 1-9/wheel select', w / 2, h - 14);
+    ctx.fillText('click to capture mouse · LMB mine · RMB eat/place · 1-9/wheel select · F sleep on bed', w / 2, h - 14);
     ctx.textAlign = 'center';
+  }
+
+  // Sleep / respawn banner.
+  if (sleepMsgTimer > 0 && sleepingMsg) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    ctx.font = 'bold 18px system-ui';
+    ctx.fillText(sleepingMsg, w / 2, h * 0.3);
+  }
+
+  // Death overlay.
+  if (!living.alive) {
+    ctx.fillStyle = 'rgba(120,10,10,0.55)';
+    ctx.fillRect(0, 0, w, h);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 34px system-ui';
+    ctx.fillText('You Died', w / 2, h / 2 - 20);
+    ctx.font = '16px system-ui';
+    ctx.fillText('Respawning…', w / 2, h / 2 + 12);
   }
 }
 
@@ -423,6 +778,20 @@ function animate() {
   loop(dt);
   syncCamera(camera, player);
 
+  // --- B2 survival: world time + metabolism ---
+  worldTime += dt * WORLD.tickRateHz;
+  const metaEvents = tickMetabolism(living, dt, { difficulty, underwater: player.inWater });
+  for (const ev of metaEvents) applyDamage(living, ev.amount, { type: ev.type, difficulty });
+  applyDamage(living, trackFall(living, dt, { airborne: !player.onGround, fallingSpeed: player.vel.y }), { type: 'environment' });
+
+  // Death / respawn after a short delay.
+  if (!living.alive && respawnTimer <= 0) respawnTimer = 3.0;
+  if (!living.alive && respawnTimer > 0) {
+    respawnTimer -= dt;
+    if (respawnTimer <= 0) respawn();
+  }
+  if (sleepMsgTimer > 0) sleepMsgTimer -= dt;
+
   // Stream + rebuild chunks.
   updateChunks(player.pos);
   processLoadQueue();
@@ -439,19 +808,31 @@ function animate() {
     breakingFraction = 0;
   }
 
-  // Mining (LMB, hardness-based).
-  if (target && lmb && input.isLocked()) {
+  // Mining (LMB, hardness-based); crops are harvested instantly on click.
+  const cropT = target ? cropOfBlock(target.id) : null;
+  if (cropT) {
+    if (lmb && !prevLmb && input.isLocked()) breakAt(target);
+    breaking.reset();
+    breakingFraction = 0;
+  } else if (target && lmb && input.isLocked()) {
     if (breaking.update(target, getBlockById(target.id), dt)) {
       breakAt(target);
     }
   } else if (!lmb) {
     breaking.reset();
   }
+  prevLmb = lmb;
   breakingFraction = breaking.progressOf(target);
 
-  // Placement (RMB).
-  if (target && rmb && !lmb && input.isLocked()) {
-    placeAt(target);
+  // Use / interact (RMB): eat food if the selected slot is food, else farming, else place.
+  if (useRequest && !lmb && input.isLocked()) {
+    useRequest = false;
+    const sel = inventory.selectedStack();
+    if (foodValue(sel.id) > 0 && living.hunger < living.maxHunger) {
+      if (eatSelected(living, inventory)) refreshHeldItem();
+    } else if (target && !useSelected(target)) {
+      placeAt(target);
+    }
   }
 
   // Drops: physics + pickup into inventory.
@@ -466,14 +847,75 @@ function animate() {
   }
   renderDrops();
 
-  // Sky tint + fog follow the solar clock (A2).
-  const t = now / 1000 * 20;
-  const tod = (t + DAY_OFFSET) % WORLD.dayLengthTicks;
-  const dayFrac = Math.sin((tod / WORLD.dayLengthTicks) * Math.PI * 2 - Math.PI / 2);
-  const blend = Math.min(1, Math.max(0, (dayFrac + 1) / 2));
-  const sky = new THREE.Color().lerpColors(new THREE.Color(0x0b1026), new THREE.Color(0x87b5d9), blend);
+  // --- B3 mobs: step AI, creeper explosions, melee attacks ---
+  if (meleeCooldown > 0) meleeCooldown -= dt;
+  if (hitFeedbackTimer > 0) hitFeedbackTimer -= dt;
+  mobTimer += dt;
+  if (mobTimer > 60) { mobTimer = 0; trySpawnMob(); }
+
+  // LMB is mining when targeting a block, melee when targeting a mob.
+  const mobTarget = aimedMob();
+  const selId = inventory.selectedStack().id;
+  const holdingBow = selId === 103;
+  if (lmb && input.isLocked()) {
+    if (holdingBow) { fireBow(); }       // bow fires in aim direction
+    else if (!target && mobTarget) { meleeSwing(mobTarget); }
+  }
+
+  for (const m of [...mobs]) {
+    if (!m.alive) continue;
+    player.alive = living.alive; // expose survival alive to mob AI
+    const ev = stepMob(m, world, player, dt * WORLD.tickRateHz, difficulty);
+    for (const e of ev) {
+      if (e.attack && e.attack.target === 'player' && living.alive) {
+        // armor reduces incoming damage
+        const reduction = armorReduction(equipped);
+        applyDamage(living, e.attack.damage * (1 - reduction), { type: 'hostile', difficulty });
+      }
+      if (e.explode) {
+        // creeper explosion modifies the world + damages nearby player & mobs
+        const dropped = explode(world, e.explode.x, e.explode.y, e.explode.z, e.explode.radius);
+        markEdited(Math.floor(e.explode.x), Math.floor(e.explode.y), Math.floor(e.explode.z));
+        for (const id of dropped) drops.push(createDrop(e.explode.x, e.explode.y, e.explode.z, id));
+        const pDist = Math.hypot(player.pos.x - e.explode.x, player.pos.z - e.explode.z);
+        if (pDist < e.explode.radius + 1.5 && living.alive) {
+          const dmg = (e.explode.radius + 1.5 - pDist) * 4;
+          applyDamage(living, Math.max(1, dmg), { type: 'hostile', difficulty });
+        }
+      }
+    }
+    // knockback impulse integration
+    if (Math.abs(m.vx) > 0.001 || Math.abs(m.vz) > 0.001) {
+      m.x += m.vx * dt;
+      m.z += m.vz * dt;
+      m.vx *= 0.9; m.vz *= 0.9;
+    }
+    if (!m.alive) killMob(m);
+  }
+  // prune dead/despawned mobs
+  for (let i = mobs.length - 1; i >= 0; i--) if (!mobs[i].alive) mobs.splice(i, 1);
+  renderMobs();
+  stepArrows(dt);
+
+  // --- day/night lighting (B2): sun + ambient follow the solar clock ---
+  const day = daylight(worldTime);
+  const night = isNight(worldTime);
+  sun.intensity = 0.12 + day * 0.95;
+  light.intensity = 0.28 + day * 0.62;
+  const ang = (worldTime / WORLD.dayLengthTicks) * Math.PI * 2;
+  sun.position.set(Math.cos(ang) * 40, Math.sin(ang) * 50 + 12, 20);
+  const skyDay = new THREE.Color(0x87b5d9);
+  const skyNight = new THREE.Color(0x070b1a);
+  const skyDawn = new THREE.Color(0xc98a5a);
+  let sky;
+  if (day < 0.15) sky = skyNight.clone().lerp(skyDay, day / 0.15);
+  else if (day < 0.55) sky = skyDawn.clone().lerp(skyDay, (day - 0.15) / 0.4);
+  else sky = skyDay.clone().lerp(skyNight, (day - 0.55) / 0.45);
   scene.background.copy(sky);
   scene.fog.color.copy(sky);
+
+  // B4: advance all crops by this frame's sim-time under current daylight.
+  tickCrops(crops, world, dt, blend);
 
   renderer.render(scene, camera);
   drawHUD();
@@ -482,7 +924,8 @@ function animate() {
   if (elapsed >= 1) {
     hudState.textContent =
       `seed=${seed} · ${chunkMeshes.size} chunks · ${renderer.info.render.triangles} tris · ` +
-      `inv ${inventory.total()} items · ${drops.filter((d) => d.alive).length} drops`;
+      `HP ${Math.ceil(living.health)}/${living.maxHealth} · hunger ${Math.floor(living.hunger)} · ` +
+      `${timeLabel(worldTime)} (${isNight(worldTime) ? 'night' : phase(worldTime)})`;
     elapsed = 0;
   }
 }
@@ -492,4 +935,4 @@ animate();
 window.addEventListener('keydown', (e) => { if (e.code === 'KeyB') recipePanel.hidden = !recipePanel.hidden; });
 
 hudState.textContent =
-  `seed=${seed} · click to capture mouse · LMB mine · RMB place · 1-9/wheel select · B recipes`;
+  `seed=${seed} · generating world… · click to capture mouse · LMB mine · RMB place/eat · 1-9/wheel select · B recipes · F sleep`;

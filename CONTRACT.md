@@ -153,3 +153,89 @@ in `src/core/*`) rather than living only in one agent's private memory.
 - **Integration**: `src/main.js` wires A2 chunk streaming + A3 player loop + A4
   mechanics; mined/placed chunks (3x3 neighbourhood) rebuild their mesh from
   `WorldState` (`src/render/worldmesh.js`).
+
+## 10. Survival & day/night (added B2)
+
+- **Stats** (`src/core/living.js`): `health`/`hunger`/`saturation` (20/20/5),
+  `air` (10s oxygen). Damage is applied via `applyDamage(living, amount,
+  {type, difficulty})`; `type:'hostile'` scales by `DIFFICULTY.damageScale`
+  (peaceful→0, easy→0.5, normal→1), while `type:'environment'` (fall, drown,
+  starve) is always full. Falling below 0 HP sets `alive=false` (death → respawn
+  after a short delay at the spawn point).
+- **Hunger & food**: hunger drains ~1 point per 30 sim-seconds (saturation
+  absorbs first). Food items (`.food` in the item registry: bread +5, apple +4)
+  restore hunger via `eatSelected`; well-fed players regenerate 1 HP/4s;
+  starvation (hunger 0) deals 1 environmental HP/4s.
+- **Drowning**: head underwater depletes the `air` bar (10s); when empty, 1 HP
+  per second. Air refills twice as fast when surfaced.
+- **Fall damage**: falling more than `fallDamageThreshold = 3` blocks deals
+  `floor(distance - 3)` environmental damage on landing (`trackFall`).
+- **Day/night cycle** (`src/core/daycycle.js`): one day = 24000 ticks; tick 0 =
+  6:00, noon 6000, dusk 12000+ (night 12000–23000, daytime undead/mob hooks).
+  `daylight(tick)` smooth 0..1 drives sun/ambient/sky; `nextDawn` skips to the
+  next 6:00. Difficulty and day phase are read-only today (no hostile mobs in
+  B2 — that is a later issue); `hostiles` become eligible at night.
+- **Sleep / spawn**: a placed **bed** (block id 18) on a solid support; pressing
+  `F` on it at night skips to `nextDawn` and resets the player's respawn point to
+  the bed. Respawning returns the player to the current spawn point at full
+  health/hunger; deaths are counted.
+- **HUD**: health/hunger/oxygen bars, day+phase+difficulty readout, death
+  overlay + respawn banner; RMB eats food when the selected slot is edible,
+  else places.
+
+## 11. Land mobs & combat gear (added B3)
+
+- **Mob registry** (`src/core/mobs.js`): pig/cow/sheep/chicken (passive),
+  zombie/spider/creeper (hostile). A mob is a plain object with
+  `{type, x,y,z (feet), vy, health, alive, passive, aggro, hurtTicks,
+  attackCooldown, fuse}`. `createMob(type,x,y,z)` spawns; `stepMob` advances one
+  tick; `damageMob(mob, amt, {x,z})` applies damage + knockback, sets
+  `alive=false` at 0 HP; `mobDrops(mob)` returns configured drops.
+- **Behaviours**: passive mobs wander or flee when hurt; hostiles wander until a
+  player is within 14 blocks, then chase and melee-attack in range (attack gets a
+  cooldown). Creeper walks up, fuses for `fuse=30` ticks, then emits
+  `{explode:{x,y,z,radius:3}}` — the caller carves the world via
+  `explode()` (`src/core/explosion.js`) which removes voxels in a radius-3 sphere
+  (skipping unbreakable blocks, e.g. bedrock) and returns dropped item ids.
+- **Difficulty gating**: `DIFFICULTY.peaceful.hostileSpawn=false`; hostile spawn
+  is gated to night (plus a small daytime chance) and damage scales via
+  `difficultyOf(name).damageScale` (peaceful→0, easy→0.5, normal→1).
+- **Mob drops** (item ids, `src/core/blocks.js`): raw_porkchop 120, raw_beef 121,
+  raw_mutton 122, raw_chicken 123, rotten_flesh 124, string 125, gunpowder 126,
+  leather 127, wool 128. Passive mobs drop 1 of each configured drop; hostiles
+  drop with a 1/8 chance. Food values let meat be eaten via the B2 system.
+- **Combat gear** (`src/core/combat.js`): swords wood/stone/iron (ids 100/101/102,
+  melee dmg 4/5/6, range 2.6/3.0/3.4), bow 103 (fires arrows, dmg 6, max range
+  48), arrow 104. `weaponStats(id)` returns per-material stats; `resolveMelee`
+  honours range + cooldown and reports `{hit, damage, knockback, feedback}`.
+- **Armor** (ids 129–136: leather/iron helmet/chest/leggings/boots; armor points
+  1/3/2/1 and 2/6/5/2): `armorReduction(equippedIds)` returns
+  `points/(points+20)` damage fraction; the player wears up to one per slot
+  (helmet/chest/leggings/boots). Press `G` to equip/unequip the selected piece.
+- **Durability**: swords/armor wear with use; a broken tool item is consumed from
+  the hotbar (hand has no tool loss). Melee `/ arrow hits and bow shots are
+  accompanied by a short HUD damage flash (observable hit feedback).
+
+## 12. Farming (added B4)
+
+- **Farmland**: right-click dirt/grass with a hoe (`wooden_hoe 216`, `stone_hoe
+  217`, `iron_hoe 218`, crafted via hoe recipes) turns the block into farmland
+  (`farmland 36`, solid). Farming logic lives in `src/core/farming.js`.
+- **Crops & planting**: wheat seeds `220`, carrot `221`, potato `222` each map
+  to a crop (`CROP_SEED_ITEM`). Right-click an existing farmland block with a
+  seed plants the stage-0 crop in the cell above. Crops are non-solid (walkable,
+  instant-harvest) with growth encoded in block ids:
+  wheat `40..43`, carrot `44..47`, potato `48..51` (4 stages each).
+- **Growth over ticks**: `tickCrops(crops, world, dt, light)` advances a
+  runtime `Map<"x,y,z",{type,age}>` each frame by sim-time under a light factor
+  (0..1 from the solar clock). Growth rate = `age * (0.35 + 0.65*light)` over
+  `FARM.growSeconds`, so crops grow faster in daylight and can be verified over
+  world ticks. A crop dies (removed) if its support is no longer farmland.
+- **Harvest**: left-click harvests instantly (`harvestDrops`). Mature crops drop
+  the vegetable (`wheat 106` + a seed for wheat); immature crops return only the
+  seed/vegetable. Carrot/potato are edible (`food: 2`/`1`); wheat feeds the B1
+  `bread` recipe — the B4 "grow -> harvest -> food prep" loop.
+- **Integration**: `src/main.js` seeds the starter kit with a hoe + seeds and
+  wires tilling/planting into the RMB handler, instant crop harvest into the LMB
+  handler, and `tickCrops` into the per-frame loop (B4 §-tests in
+  `test/b4.test.js`).

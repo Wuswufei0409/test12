@@ -76,6 +76,9 @@ const R_ = {
   wooden_shovel: { name: 'wooden_shovel', output: [213, 1], shape: [['planks'], ['stick'], ['stick']] },
   stone_shovel: { name: 'stone_shovel', output: [214, 1], shape: [['cobblestone'], ['stick'], ['stick']] },
   iron_shovel: { name: 'iron_shovel', output: [215, 1], shape: [['iron_ingot'], ['stick'], ['stick']] },
+  wooden_hoe: { name: 'wooden_hoe', output: [216, 1], shape: [['planks', 'planks'], ['.', 'stick'], ['.', 'stick']] },
+  stone_hoe: { name: 'stone_hoe', output: [217, 1], shape: [['cobblestone', 'cobblestone'], ['.', 'stick'], ['.', 'stick']] },
+  iron_hoe: { name: 'iron_hoe', output: [218, 1], shape: [['iron_ingot', 'iron_ingot'], ['.', 'stick'], ['.', 'stick']] },
   wooden_sword: { name: 'wooden_sword', output: [100, 1], shape: [['planks'], ['planks'], ['stick']] },
   stone_sword: { name: 'stone_sword', output: [101, 1], shape: [['cobblestone'], ['cobblestone'], ['stick']] },
   iron_sword: { name: 'iron_sword', output: [102, 1], shape: [['iron_ingot'], ['iron_ingot'], ['stick']] },
@@ -84,6 +87,58 @@ const R_ = {
   sea_lantern: { name: 'sea_lantern', output: [34, 1], shape: [
     ['prismarine_shard', 'prismarine_shard'],
     ['prismarine_shard', 'prismarine_shard'],
+  ] },
+  // B3 combat gear (crit 12)
+  bow: { name: 'bow', output: [103, 1], shape: [
+    ['.', 'string', 'stick'],
+    ['stick', '.', 'string'],
+    ['.', 'string', 'stick'],
+  ] },
+  arrow: { name: 'arrow', output: [104, 4], shape: [
+    ['stick'],
+    ['coal'],
+    ['stick'],
+  ] },
+  shield: { name: 'shield', output: [114, 1], shape: [
+    ['planks', 'planks', 'planks'],
+    ['planks', 'planks', 'planks'],
+    ['planks', '.', 'planks'],
+  ] },
+  leather_helmet: { name: 'leather_helmet', output: [129, 1], shape: [
+    ['leather', 'leather', 'leather'],
+    ['leather', '.', 'leather'],
+  ] },
+  leather_chest: { name: 'leather_chest', output: [130, 1], shape: [
+    ['leather', '.', 'leather'],
+    ['leather', 'leather', 'leather'],
+    ['leather', 'leather', 'leather'],
+  ] },
+  leather_leggings: { name: 'leather_leggings', output: [131, 1], shape: [
+    ['leather', 'leather', 'leather'],
+    ['leather', '.', 'leather'],
+    ['leather', '.', 'leather'],
+  ] },
+  leather_boots: { name: 'leather_boots', output: [132, 1], shape: [
+    ['leather', '.', 'leather'],
+    ['leather', '.', 'leather'],
+  ] },
+  iron_helmet: { name: 'iron_helmet', output: [133, 1], shape: [
+    ['iron_ingot', 'iron_ingot', 'iron_ingot'],
+    ['iron_ingot', '.', 'iron_ingot'],
+  ] },
+  iron_chest: { name: 'iron_chest', output: [134, 1], shape: [
+    ['iron_ingot', '.', 'iron_ingot'],
+    ['iron_ingot', 'iron_ingot', 'iron_ingot'],
+    ['iron_ingot', 'iron_ingot', 'iron_ingot'],
+  ] },
+  iron_leggings: { name: 'iron_leggings', output: [135, 1], shape: [
+    ['iron_ingot', 'iron_ingot', 'iron_ingot'],
+    ['iron_ingot', '.', 'iron_ingot'],
+    ['iron_ingot', '.', 'iron_ingot'],
+  ] },
+  iron_boots: { name: 'iron_boots', output: [136, 1], shape: [
+    ['iron_ingot', '.', 'iron_ingot'],
+    ['iron_ingot', '.', 'iron_ingot'],
   ] },
 };
 
