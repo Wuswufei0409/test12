@@ -102,6 +102,26 @@ in `src/core/*`) rather than living only in one agent's private memory.
 - Releases are tagged and CI builds are immutable per commit.
 - The deploy is GitHub Pages at `https://Wuswufei0409.github.io/test12/`.
 
+## 8. Crafting / tools / smelting (added B1)
+
+- Crafting is **config-driven**: `src/core/crafting.js` `RECIPES` holds shaped
+  (2x2/3x3) and shapeless recipes; each recipe outputs `[itemId, count]`.
+  Matching trims the 3x3 grid to its occupied bounding box so placement corner
+  is irrelevant. Exposes `findRecipe(craftGrid)|craft(grid)|recipeBook()`.
+- Item IDs: base registry (`blocks.js` BLOCKS/ITEMS, ids 0..118) plus B1 items
+  (`items.js` B1_ITEMS, ids 200..215). Names must resolve via these tables only.
+- Tool tiers `TOOL_TIERS`: wood (durability 60, digSpeed 1.0, harvest 0),
+  stone (132, 2.0, 1), iron (251, 3.0, 2). Tool type per item in `TOOL_ITEMS`.
+- Block->required tool (`BLOCK_TOOL`) and min harvest (`BLOCK_HARVEST`) enforce
+  wrong-tool/harvest restrictions; wrong tool => no drop. Ore drops: coal_ore -> coal,
+  iron_ore -> iron_ore (smelted). Dig time = hardness / digSpeed (see `dig()`).
+- Smelting: `src/core/smelting.js` `SMELTING_RECIPES` (iron_ore->iron_ingot,
+  coal_ore->coal, sand->glass) with `FUEL` tick values; `Furnace` is a pure tick
+  state machine (input/fuel/output/progress). Full chain: wood pickaxe -> mine
+  coal & iron -> smelt -> craft iron pickaxe, validated by test.
+- Inventory uses the canonical A4 hotbar module `createInventory`
+  (`src/core/inventory.js`), shared by B1 tests and A4 mechanics.
+
 ## 9. Mining, placement, drops & inventory (added A4)
 
 - **World edits** are an overlay on deterministic terrain: `WorldState`

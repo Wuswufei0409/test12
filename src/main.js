@@ -19,6 +19,19 @@ import { dropForBlock, createDrop, stepDrop, canPickup } from './core/drops.js';
 import { getBlockById, BLOCKS, ITEMS } from './core/blocks.js';
 import { buildChunkMesh } from './render/worldmesh.js';
 import { getAtlasTexture, tileUV, TILES } from './render/atlas.js';
+import { recipeBook } from './core/crafting.js';
+
+// Recipe book UI (toggle with B)
+const recipePanel = document.getElementById('recipe-book');
+const recipeList = document.getElementById('recipe-list');
+if (recipeList) {
+  recipeList.innerHTML = recipeBook().map((r) => {
+    const outId = r.output[0];
+    const outName = getBlockById(outId)?.name ?? String(outId);
+    const spec = r.pattern ? r.pattern.map((row) => row.join(' ')).join(' / ') : `(shapeless: ${(r.ingredients || []).join('+')})`;
+    return `<li><b>${r.name}</b> → ${outName} ×${r.output[1]} · ${spec}</li>`;
+  }).join('');
+}
 
 const app = document.getElementById('app');
 const hudState = document.getElementById('hud-state');
@@ -475,5 +488,8 @@ function animate() {
 }
 animate();
 
+// toggle recipe book with B
+window.addEventListener('keydown', (e) => { if (e.code === 'KeyB') recipePanel.hidden = !recipePanel.hidden; });
+
 hudState.textContent =
-  `seed=${seed} · generating world… · click to capture mouse · LMB mine · RMB place · 1-9/wheel select`;
+  `seed=${seed} · click to capture mouse · LMB mine · RMB place · 1-9/wheel select · B recipes`;
