@@ -41,30 +41,37 @@ LICENSE         # MIT license
 NOTICE.md       # unofficial-project & asset-origin notice
 ```
 
-## Project state (Phase A)
+## Project state
 
-This milestone delivers the **backbone only**:
+Delivered so far:
 
-- Vite + Three.js scaffold that builds cleanly and renders a voxel ground.
-- Deterministic seeded world-gen primitives (mulberry32 RNG, heightmap,
-  biomes, terrain fingerprint).
-- Core-logic unit tests + fixed-seed smoke test.
-- CI (GitHub Actions): build + core tests + fixed-seed smoke + Pages deploy.
-- Public HTTPS deployment on GitHub Pages.
-- `CONTRACT.md` defining shared cross-module contracts.
+- **Phase A backbone:** Vite+Three.js scaffold, CI (build + core tests +
+  fixed-seed smoke + Pages deploy), public HTTPS on GitHub Pages,
+  `CONTRACT.md` shared contracts.
+- **A2 world generation & rendering:** deterministic seeded value-noise world
+  with **8 biomes** (plains, forest, desert, mountains + cold/warm/deep/shallow
+  oceans), chunk generation/load/unload streaming, merged mesh voxel rendering
+  with face culling, procedural pixel-texture atlas (original art), first-person
+  3D view, day/night sky + fog, crosshair, hotbar/HUD overlay, and a
+  reproducible fixed-seed terrain fingerprint/sample.
 
-The full 20-standard gameplay scope (mining/building, inventory, crafting,
-survival, mobs, ocean/aquatic content, trident, saving, performance
-benchmarking, final acceptance) is out of scope for this issue and is tracked
-in later issues. See **Known limits** below.
+Playable survival systems (mining/placing, inventory, crafting, mobs, ocean
+content, trident, saving, performance benchmarking) are tracked by later issues.
+See **Known limits** below.
 
-## Known limits (Phase A / A1–A3)
+## Known limits (Phase A / A1–A4)
 
-1. Rendering is a block-color voxel arena — no chunk streaming, LOD, textures, or block interaction yet.
-2. Player control implemented (pointer lock, WASD, jump/sprint/sneak/swim, AABB collision, step-up) but no mining/building/pickup.
-3. No survival/combat/crafting/inventory logic.
-4. No persistence; save format is contracted but not yet used by runtime.
-5. Performance benchmark (standard 19) not yet measured (no meaningful scene).
+1. Player control implemented (pointer lock, WASD, jump/sprint/sneak/swim, AABB
+   collision, step-up). Mining/placing/drops/pickup and a 9-slot hotbar with
+   stacking are implemented on the generated, chunks, but no crafting/combat
+   progression yet.
+2. Drops are simple physics entities; no despawn-on-logout save of dropped
+   items, chests, or furnaces yet.
+3. No survival/combat/crafting debth: hearts/hunger ticks, mobs, tools, and
+   enchantments are not modelled.
+4. No persistence; the save format is contracted but not yet used by runtime.
+5. Performance benchmark (standard 19) not yet measured in a full survival
+   session.
 
 ## License & assets
 
