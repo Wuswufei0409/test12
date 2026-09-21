@@ -22,6 +22,9 @@ export const TOOL_ITEMS = {
   213: { material: 'wood', type: 'shovel' }, // wooden_shovel
   214: { material: 'stone', type: 'shovel' },
   215: { material: 'iron', type: 'shovel' },
+  216: { material: 'wood', type: 'hoe' }, // wooden_hoe
+  217: { material: 'stone', type: 'hoe' },
+  218: { material: 'iron', type: 'hoe' },
 };
 
 export const B1_ITEMS = {
@@ -34,7 +37,20 @@ export const B1_ITEMS = {
   kelp: { id: 200, name: 'kelp', stack: 64 },
   prismarine_shard: { id: 201, name: 'prismarine_shard', stack: 64 },
   dried_kelp: { id: 202, name: 'dried_kelp', stack: 64, food: 1 },
+  // B4 farming: hoes (till dirt) + plantable/edible crops + seeds
+  wooden_hoe: { id: 216, name: 'wooden_hoe', stack: 1, color: 0x8a6f47 },
+  stone_hoe: { id: 217, name: 'stone_hoe', stack: 1, color: 0x8f8f8f },
+  iron_hoe: { id: 218, name: 'iron_hoe', stack: 1, color: 0xd8d8d8 },
+  wheat_seeds: { id: 220, name: 'wheat_seeds', stack: 64, color: 0xc8b25a },
+  carrot: { id: 221, name: 'carrot', stack: 64, food: 2, color: 0xe8833a },
+  potato: { id: 222, name: 'potato', stack: 64, food: 1, color: 0xb08a3a },
 };
+
+// Item ids that are hoes (used by the tilling interaction).
+export const HOE_ITEMS = new Set([216, 217, 218]);
+export function isHoeItem(id) {
+  return HOE_ITEMS.has(id);
+}
 
 // Required tool type per placeable block id (for wrong-tool restriction).
 // 'none' = mineable by hand. Ores require pickaxe of sufficient harvest level.

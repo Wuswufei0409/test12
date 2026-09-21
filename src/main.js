@@ -17,6 +17,10 @@ import { Breaking } from './core/breaking.js';
 import { createInventory, itemName, stackCapacity } from './core/inventory.js';
 import { dropForBlock, createDrop, stepDrop, canPickup } from './core/drops.js';
 import { getBlockById, BLOCKS, ITEMS } from './core/blocks.js';
+import { isHoeItem } from './core/items.js';
+import {
+  cropForSeed, cropOfBlock, stageBlockId, harvestDrops, tickCrops, isFarmland, maxStage,
+} from './core/farming.js';
 import { buildChunkMesh } from './render/worldmesh.js';
 import { getAtlasTexture, tileUV, TILES } from './render/atlas.js';
 import { recipeBook } from './core/crafting.js';
@@ -104,6 +108,11 @@ inventory.add(1, 8); // stone
 inventory.add(7, 8); // planks
 inventory.add(BLOCKS.bed.id, 1); // bed (place on solid ground; F to sleep at night)
 inventory.add(ITEMS.bread.id, 8); // food (RMB to eat when hungry)
+// B4: a hoe + seeds so farming is immediately testable in a fresh world.
+inventory.add(216, 1); // wooden_hoe
+inventory.add(220, 12); // wheat_seeds
+inventory.add(221, 4); // carrot (plantable + edible)
+inventory.add(222, 4); // potato (plantable + edible)
 refreshHeldItem();
 
 // ---------- survival state (B2) ----------
@@ -395,9 +404,26 @@ function aim() {
 // ---------- mining / placement (A4) ----------
 const breaking = new Breaking();
 let breakingFraction = 0; // per-frame smoothed progress for the HUD/overlay
+let prevLmb = false;
+// Tracked crops: coordKey("x,y,z") -> { type, age (sim seconds) }.
+const crops = new Map();
 let mining = false;
 let placing = false;
 function breakAt(hit) {
+  // B4: harvesting a crop spawns the proper drops (mature vs immature).
+  const crop = cropOfBlock(hit.id);
+  if (crop) {
+    const key = WorldState.key(hit.x, hit.y, hit.z);
+    const mature = crop.stage === maxStage(crop.type);
+    world.set(hit.x, hit.y, hit.z, 0);
+    markEdited(hit.x, hit.y, hit.z);
+    crops.delete(key);
+    for (const it of harvestDrops(crop.type, mature)) {
+      drops.push(createDrop(hit.x, hit.y, hit.z, it.itemId, it.count));
+    }
+    hudState.textContent = `harvested ${crop.type} @ ${hit.x},${hit.y},${hit.z}`;
+    return;
+  }
   const dropId = dropForBlock(hit.id);
   world.set(hit.x, hit.y, hit.z, 0);
   markEdited(hit.x, hit.y, hit.z);
@@ -466,6 +492,43 @@ function sleepNow() {
   sleepingMsg = 'Slept until dawn — spawn point set at bed';
   sleepMsgTimer = 4;
 }
+
+// B4 farming interactions with the selected item: till dirt with a hoe, or
+// plant a seed on an existing farmland block. Returns true when handled.
+function useSelected(hit) {
+  const sel = inventory.selectedStack();
+  if (sel.count <= 0) return false;
+
+  // (1) Till dirt/grass into farmland with a hoe.
+  if (isHoeItem(sel.id) && (hit.id === BLOCKS.dirt.id || hit.id === BLOCKS.grass.id) && !overlapsPlayer(hit.x, hit.y, hit.z)) {
+    inventory.takeSelected(1); // consume hoe durability per use (kept simple)
+    inventory.add(sel.id, 1); // restore: hoes are not consumed on till
+    world.set(hit.x, hit.y, hit.z, 36); // farmland
+    markEdited(hit.x, hit.y, hit.z);
+    hudState.textContent = `tilled farmland @ ${hit.x},${hit.y},${hit.z}`;
+    return true;
+  }
+
+  // (2) Plant a seed on a farmland block (grows into the cell above).
+  const cropType = cropForSeed(sel.id);
+  if (cropType && isFarmland(hit.id)) {
+    const ax = hit.x;
+    const ay = hit.y + 1;
+    const az = hit.z;
+    if (world.get(ax, ay, az) === 0 && !overlapsPlayer(ax, ay, az)) {
+      inventory.takeSelected(1);
+      world.set(ax, ay, az, stageBlockId(cropType, 0));
+      markEdited(ax, ay, az);
+      crops.set(WorldState.key(ax, ay, az), { type: cropType, age: 0 });
+      hudState.textContent = `planted ${cropType} @ ${ax},${ay},${az}`;
+      shiftAndReload();
+      return true;
+    }
+  }
+
+  return false; // fall through to normal placement
+}
+
 
 // ---------- drops (A4) ----------
 const drops = [];
@@ -745,23 +808,29 @@ function animate() {
     breakingFraction = 0;
   }
 
-  // Mining (LMB, hardness-based).
-  if (target && lmb && input.isLocked()) {
+  // Mining (LMB, hardness-based); crops are harvested instantly on click.
+  const cropT = target ? cropOfBlock(target.id) : null;
+  if (cropT) {
+    if (lmb && !prevLmb && input.isLocked()) breakAt(target);
+    breaking.reset();
+    breakingFraction = 0;
+  } else if (target && lmb && input.isLocked()) {
     if (breaking.update(target, getBlockById(target.id), dt)) {
       breakAt(target);
     }
   } else if (!lmb) {
     breaking.reset();
   }
+  prevLmb = lmb;
   breakingFraction = breaking.progressOf(target);
 
-  // Use / interact (RMB): eat food if the selected slot is food, else place.
+  // Use / interact (RMB): eat food if the selected slot is food, else farming, else place.
   if (useRequest && !lmb && input.isLocked()) {
     useRequest = false;
     const sel = inventory.selectedStack();
     if (foodValue(sel.id) > 0 && living.hunger < living.maxHunger) {
       if (eatSelected(living, inventory)) refreshHeldItem();
-    } else if (target) {
+    } else if (target && !useSelected(target)) {
       placeAt(target);
     }
   }
@@ -844,6 +913,9 @@ function animate() {
   else sky = skyDay.clone().lerp(skyNight, (day - 0.55) / 0.45);
   scene.background.copy(sky);
   scene.fog.color.copy(sky);
+
+  // B4: advance all crops by this frame's sim-time under current daylight.
+  tickCrops(crops, world, dt, blend);
 
   renderer.render(scene, camera);
   drawHUD();
