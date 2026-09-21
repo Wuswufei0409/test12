@@ -1,13 +1,19 @@
 // Hotbar + basic inventory with stacking. Pure module, headless-testable.
 //
-// The inventory is a fixed set of slots (9 hotbar slots by default, matching
-// the CONTRACT hotbar). Adding an item first stacks onto existing matching
-// slots up to that item's stack limit, then fills empty slots. Selected slot
-// drives what the player can place.
+// The inventory is a fixed set of slots (9 hotbar + storage by default). Adding
+// an item first stacks onto existing matching slots up to that item's stack
+// limit, then fills empty slots. Selected slot (within the hotbar) drives what
+// the player can place. The full-inventory UI (criterion 06) operates on the
+// same stacks array via moveTo/splitHalf/swapSlots.
 import { getBlockById, BLOCKS, ITEMS } from './blocks.js';
 import { B1_ITEMS } from './items.js';
 
 export const HOTBAR_SIZE = 9;
+// Standard 36-slot model: 9 hotbar slots + 27 storage slots.
+export const INVENTORY_SIZE = 36;
+export const STORAGE_SLOTS = INVENTORY_SIZE - HOTBAR_SIZE;
+
+export function isHotbarIndex(i) { return Number.isInteger(i) && i >= 0 && i < HOTBAR_SIZE; }
 
 /** Maximum items per slot for a given id (blocks stack 64; items use .stack). */
 export function stackCapacity(id) {
@@ -96,6 +102,64 @@ export function createInventory(size = HOTBAR_SIZE) {
     /** Is the selected slot empty? */
     selectedEmpty() {
       return this.stacks[this.selected].count === 0;
+    },
+
+    // ---- full-inventory UI operations (criterion 06) ----
+    /** Direct access to a slot by index. */
+    stackAt(i) {
+      return this.stacks[i];
+    },
+
+    /** Swap the contents of two slots. */
+    swapSlots(a, b) {
+      const s = this.stacks[a];
+      this.stacks[a] = this.stacks[b];
+      this.stacks[b] = s;
+    },
+
+    /**
+     * Move stack `from` into slot `to` per inventory rules:
+     *  - target empty -> move whole stack;
+     *  - same item    -> stack up to capacity (leftover stays in `from`);
+     *  - different    -> swap the two slots.
+     * Returns leftover count left in `from` (0 if emptied).
+     */
+    moveTo(from, to) {
+      const a = this.stacks[from];
+      const b = this.stacks[to];
+      if (a.count <= 0) return 0;
+      if (b.count === 0) {
+        b.id = a.id; b.count = a.count;
+        a.id = 0; a.count = 0;
+        return 0;
+      }
+      if (b.id === a.id) {
+        const cap = stackCapacity(a.id);
+        const room = cap - b.count;
+        if (room <= 0) return a.count;
+        const take = Math.min(room, a.count);
+        b.count += take;
+        a.count -= take;
+        if (a.count === 0) a.id = 0;
+        return a.count;
+      }
+      this.swapSlots(from, to);
+      return 0;
+    },
+
+    /**
+     * Split ~half of stack `from` into an empty slot `to` (Minecraft shift-click
+     * / grab-split behaviour). Returns true on success.
+     */
+    splitHalf(from, to) {
+      const a = this.stacks[from];
+      const b = this.stacks[to];
+      if (a.count <= 1 || b.count !== 0) return false;
+      const half = Math.ceil(a.count / 2);
+      b.id = a.id;
+      b.count = half;
+      a.count -= half;
+      return true;
     },
   };
 }

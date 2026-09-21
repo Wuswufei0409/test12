@@ -30,7 +30,7 @@ export function createInput(canvas, camera, player) {
   window.addEventListener('keydown', (e) => { keys[e.code] = true; guard(e); });
   window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
-  canvas.addEventListener('click', () => { if (!locked && !window.__craftingOpen) canvas.requestPointerLock(); });
+  canvas.addEventListener('click', () => { if (!locked && !window.__inventoryOpen && !window.__craftingOpen) canvas.requestPointerLock(); });
   document.addEventListener('pointerlockchange', () => { locked = document.pointerLockElement === canvas; });
   document.addEventListener('mousemove', (e) => {
     if (!locked) return;
