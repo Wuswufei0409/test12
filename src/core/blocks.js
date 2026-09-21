@@ -69,6 +69,16 @@ const REGISTRY = {
   treasure_map: { id: 119, name: 'treasure_map', item: true, stack: 1 },
   coral: { id: 120, name: 'coral', item: true, stack: 64 },
   prismarine_shard: { id: 121, name: 'prismarine_shard', item: true, stack: 64 }, // canonical (CONTRACT items 119..121)
+  // --- B6 aquatic (crit 16/17). ids 220..231; do not reorder (persisted). ---
+  cod: { id: 220, name: 'cod', item: true, stack: 64, food: 2, color: 0xbb9f6a },
+  salmon: { id: 221, name: 'salmon', item: true, stack: 64, food: 2, color: 0xd8876a },
+  tropical_fish: { id: 222, name: 'tropical_fish', item: true, stack: 64, food: 1, color: 0x4a9ad8 },
+  pufferfish_item: { id: 223, name: 'pufferfish', item: true, stack: 64, food: 1, color: 0xd8c84a },
+  water_bucket: { id: 224, name: 'water_bucket', item: true, stack: 1 },
+  cod_bucket: { id: 225, name: 'bucket of cod', item: true, stack: 1 },
+  salmon_bucket: { id: 226, name: 'bucket of salmon', item: true, stack: 1 },
+  tropical_fish_bucket: { id: 227, name: 'bucket of tropical fish', item: true, stack: 1 },
+  pufferfish_bucket: { id: 228, name: 'bucket of pufferfish', item: true, stack: 1 },
 };
 
 export const BLOCKS = Object.fromEntries(
