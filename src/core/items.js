@@ -32,7 +32,6 @@ export const B1_ITEMS = {
   stone_shovel: { id: 214, name: 'stone_shovel', stack: 1 },
   iron_shovel: { id: 215, name: 'iron_shovel', stack: 1 },
   kelp: { id: 200, name: 'kelp', stack: 64 },
-  prismarine_shard: { id: 201, name: 'prismarine_shard', stack: 64 },
   dried_kelp: { id: 202, name: 'dried_kelp', stack: 64, food: 1 },
 };
 

@@ -20,8 +20,9 @@ import { getBlockById, BLOCKS, ITEMS } from './core/blocks.js';
 import { buildChunkMesh } from './render/worldmesh.js';
 import { getAtlasTexture, tileUV, TILES } from './render/atlas.js';
 import { recipeBook } from './core/crafting.js';
-import { createAir, stepAir, headInWater, underwaterVisibility, isUnderwaterCell, breakUnderwater } from './core/water.js';
-import { applyStructures } from './core/structures.js';
+import { createAir, stepAir, headInWater, underwaterVisibility, isUnderwaterCell, breakUnderwater, drowningDamage } from './core/water.js';
+import { applyStructures, treasureLoot, revealTreasure } from './core/structures.js';
+import { DIFFICULTY } from './core/world.js';
 
 // Recipe book UI (toggle with B)
 const recipePanel = document.getElementById('recipe-book');
@@ -205,6 +206,11 @@ function solidMaterial() {
   return solidMat;
 }
 
+// B5: trease_chest block id + treasure_map item id (block/loot wiring, crit 15).
+const TREASURE_CHEST_ID = (BLOCKS.treasure_chest && BLOCKS.treasure_chest.id) ?? 41;
+const TREASURE_MAP_ID = (ITEMS && ITEMS.treasure_map && ITEMS.treasure_map.id) ?? 119;
+let currentDifficulty = 'normal'; // peaceful | easy | normal — scales drowning damage (crit 14)
+
 // ---------- targeting + highlight ----------
 let target = null;
 const highlight = new THREE.LineSegments(
@@ -226,14 +232,22 @@ let breakingFraction = 0; // per-frame smoothed progress for the HUD/overlay
 let mining = false;
 let placing = false;
 function breakAt(hit) {
-  const dropId = dropForBlock(hit.id);
   // Underwater breaks fill the cell with water (no erroneous air pockets).
   const underwater = isUnderwaterCell(world, hit.x, hit.y, hit.z);
   world.set(hit.x, hit.y, hit.z, breakUnderwater(underwater));
   markEdited(hit.x, hit.y, hit.z);
-  if (dropId != null) {
-    const d = createDrop(hit.x, hit.y, hit.z, dropId);
-    drops.push(d);
+  // Buried treasure chests drop the mineable reward (coral + prismarine + diamond)
+  // directly instead of the chest block itself (crit 15 loot wiring).
+  if (hit.id === TREASURE_CHEST_ID) {
+    for (const l of treasureLoot()) {
+      drops.push(createDrop(hit.x, hit.y, hit.z, l.itemId, l.count));
+    }
+  } else {
+    const dropId = dropForBlock(hit.id);
+    if (dropId != null) {
+      const d = createDrop(hit.x, hit.y, hit.z, dropId);
+      drops.push(d);
+    }
   }
   hudState.textContent = `broken ${getBlockById(hit.id).name} @ ${hit.x},${hit.y},${hit.z}`;
 }
@@ -424,6 +438,20 @@ function drawHUD() {
   ctx.font = '15px system-ui';
   ctx.fillText(`selected: ${selName}${sel.count > 0 ? ` ×${sel.count}` : ''}`, 14, h - 14);
 
+  // B5: treasure map reveal — holding a map points to the nearest buried
+  // treasure (crit 15 in-game reveal action).
+  if (sel.id === TREASURE_MAP_ID && player.pos) {
+    const nearest = revealTreasure(world, seed, player.pos, 128);
+    ctx.fillStyle = 'rgba(255,240,160,0.95)';
+    ctx.font = '14px system-ui';
+    if (nearest) {
+      const dirDeg = ((Math.atan2(nearest.x - player.pos.x, nearest.z - player.pos.z) * 180 / Math.PI) + 360) % 360;
+      ctx.fillText(`TREASURE ${Math.round(nearest.dist)}m away — heading ${Math.round(dirDeg)}° (${Math.round(nearest.x)},${Math.round(nearest.z)})`, 14, h - 66);
+    } else {
+      ctx.fillText('TREASURE — no buried treasure within range', 14, h - 66);
+    }
+  }
+
   // Targeting hints
   if (target) {
     ctx.fillStyle = 'rgba(255,255,255,0.85)';
@@ -457,10 +485,12 @@ function animate() {
   loop(dt);
   syncCamera(camera, player);
 
-  // B5: oxygen meter + drowning (crit 14).
+  // B5: oxygen meter + drowning, scaled by difficulty (crit 14).
   const underWater = headInWater(world, player.pos, P.eyeHeight);
   const { drowning } = stepAir(airState, underWater, dt);
-  if (drowning > 0) playerHealth = Math.max(0, playerHealth - drowning);
+  const drowningScale = DIFFICULTY[currentDifficulty] ? DIFFICULTY[currentDifficulty].damageScale : 1;
+  const scaledDrowning = drowningDamage(drowning, drowningScale);
+  if (scaledDrowning > 0) playerHealth = Math.max(0, playerHealth - scaledDrowning);
 
   // Stream + rebuild chunks.
   updateChunks(player.pos);

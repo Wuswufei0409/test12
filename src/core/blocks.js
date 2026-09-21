@@ -68,7 +68,7 @@ const REGISTRY = {
   iron_pickaxe: { id: 118, name: 'iron_pickaxe', item: true, stack: 1 },
   treasure_map: { id: 119, name: 'treasure_map', item: true, stack: 1 },
   coral: { id: 120, name: 'coral', item: true, stack: 64 },
-  prismarine_shard_item: { id: 121, name: 'prismarine_shard_item', item: true, stack: 64 },
+  prismarine_shard: { id: 121, name: 'prismarine_shard', item: true, stack: 64 }, // canonical (CONTRACT items 119..121)
 };
 
 export const BLOCKS = Object.fromEntries(

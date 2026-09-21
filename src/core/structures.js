@@ -20,7 +20,7 @@ const SAND = bid('sand');
 const WATER = bid('water');
 const TREASURE_CHEST = bid('treasure_chest');
 const CORAL_BLOCK = bid('coral_block');
-const PRISMARINE_SHARD = 201; // items.js prismarine_shard
+const PRISMARINE_SHARD = 121; // canonical prismarine_shard item (blocks.js ITEMS, CONTRACT 119..121)
 const CORAL = 120; // coral item (blocks.js)
 const DIAMOND = 13; // diamond_ore block id
 

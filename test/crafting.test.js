@@ -9,7 +9,7 @@ import { createInventory } from '../src/core/inventory.js';
 // Build a 3x3 grid (row-major) from a 2D pattern of item-id numbers or names.
 const I = {
   planks: 7, log: 8, stick: 107, coal: 111, cobblestone: 10,
-  iron_ingot: 110, wheat: 106, kelp: 200, prismarine_shard: 201,
+  iron_ingot: 110, wheat: 106, kelp: 200, prismarine_shard: 121,
 };
 function grid(pattern) {
   const out = new Array(9).fill(0);

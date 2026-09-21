@@ -15,6 +15,7 @@ import { createDrop, stepDrop } from '../src/core/drops.js';
 import {
   structureAt, applyStructures, treasureColumn, revealTreasure, treasureLoot,
 } from '../src/core/structures.js';
+import { DIFFICULTY } from '../src/core/world.js';
 
 const SEED = WORLD.seed;
 const WATER = BLOCKS.water.id;
@@ -57,6 +58,16 @@ describe('crit 14 · underwater detection & oxygen', () => {
     expect(r.drowning).toBeGreaterThan(0);
     expect(drowningDamage(r.drowning, 1)).toBeCloseTo(r.drowning, 5);
     expect(drowningDamage(r.drowning, 0)).toBe(0); // peaceful: no drowning
+  });
+
+  it('drowning damage is scaled by the current difficulty (crit 14 rework)', () => {
+    // normal = 1.0 (full), easy = 0.5, peaceful = 0 — main.js applies this scale.
+    expect(DIFFICULTY.normal.damageScale).toBe(1);
+    expect(DIFFICULTY.easy.damageScale).toBe(0.5);
+    expect(DIFFICULTY.peaceful.damageScale).toBe(0);
+    const r = stepAir(createAir(0), true, 1);
+    expect(drowningDamage(r.drowning, DIFFICULTY.easy.damageScale)).toBeCloseTo(r.drowning * 0.5, 5);
+    expect(drowningDamage(r.drowning, DIFFICULTY.peaceful.damageScale)).toBe(0);
   });
 
   it('sprint-swim is faster than normal swim', () => {
@@ -173,11 +184,32 @@ describe('crit 15 · structures & treasure', () => {
     expect(loot.every((l) => l.count > 0)).toBe(true);
   });
 
+
   it('treasure map reveals a nearby buried treasure deterministically', () => {
     const w = new WorldState('ocnseed');
     const player = { x: 0, z: 0 };
     const r1 = revealTreasure(w, 'ocnseed', player, 512);
     const r2 = revealTreasure(w, 'ocnseed', player, 512);
     expect(r1 === null || r1.x === r2.x).toBe(true);
+  });
+
+  it('prismarine shard uses the canonical item id 121 (name matches registry)', () => {
+    // Canonical CONTRACT §159-162: items 119..121 = treasure_map, coral, prismarine_shard.
+    expect(ITEMS.prismarine_shard.id).toBe(121);
+    expect(ITEMS.prismarine_shard.name).toBe('prismarine_shard');
+    // Treasure loot must reference the canonical item id, not a stray 201 duplicate.
+    const loot = treasureLoot();
+    const shard = loot.find((l) => l.itemId === 121);
+    expect(shard).toBeDefined();
+    expect(shard.count).toBeGreaterThan(0);
+  });
+
+  it('treasureLoot yields the mineable reward (coral + prismarine + diamond)', () => {
+    const loot = treasureLoot();
+    const ids = loot.map((l) => l.itemId);
+    expect(ids).toContain(ITEMS.coral.id);
+    expect(ids).toContain(ITEMS.prismarine_shard.id);
+    expect(ids).toContain(BLOCKS.diamond_ore.id);
+    expect(loot.every((l) => l.count > 0)).toBe(true);
   });
 });
