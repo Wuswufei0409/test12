@@ -54,6 +54,13 @@ const REGISTRY = {
   potato_s1: { id: 49, name: 'potato (growing)', solid: false, hardness: 0, color: 0x4a9a3a },
   potato_s2: { id: 50, name: 'potato (almost)', solid: false, hardness: 0, color: 0x8a8f2a },
   potato_s3: { id: 51, name: 'potato', solid: false, hardness: 0, color: 0xb08a3a },
+  // --- B5 ocean blocks (renumbered to free ids 52..57 to avoid collision with B4 blocks 36-51; persisted by name) ---
+  coral_block: { id: 52, name: 'coral_block', solid: true, hardness: 0.4, color: 0xe0668a },
+  coral_plant: { id: 53, name: 'coral_plant', solid: false, hardness: 0.1, color: 0xff6b8a },
+  kelp_block: { id: 54, name: 'kelp', solid: false, hardness: 0.1, color: 0x3c8a3c },
+  seagrass: { id: 55, name: 'seagrass', solid: false, hardness: 0.1, color: 0x5cab4c },
+  ice_berg: { id: 56, name: 'iceberg', solid: true, hardness: 0.6, color: 0xbfe7f5 },
+  treasure_chest: { id: 57, name: 'treasure_chest', solid: true, hardness: 2.5, color: 0x9a6a2a },
   wood_sword: { id: 100, name: 'wood_sword', item: true, stack: 1 },
   stone_sword: { id: 101, name: 'stone_sword', item: true, stack: 1 },
   iron_sword: { id: 102, name: 'iron_sword', item: true, stack: 1 },
@@ -91,6 +98,10 @@ const REGISTRY = {
   iron_chest: { id: 134, name: 'iron_chest', item: true, stack: 1, armorFactor: 6, color: 0xd8d8d8 },
   iron_leggings: { id: 135, name: 'iron_leggings', item: true, stack: 1, armorFactor: 5, color: 0xd8d8d8 },
   iron_boots: { id: 136, name: 'iron_boots', item: true, stack: 1, armorFactor: 2, color: 0xd8d8d8 },
+  // B5 ocean items (renumbered: coral 200, prismarine_shard 201 to avoid B3 item collision 120-136; treasure_map 119 free)
+  treasure_map: { id: 119, name: 'treasure_map', item: true, stack: 1 },
+  coral: { id: 200, name: 'coral', item: true, stack: 64 },
+  prismarine_shard: { id: 201, name: 'prismarine_shard', item: true, stack: 64 },
 };
 
 export const BLOCKS = Object.fromEntries(

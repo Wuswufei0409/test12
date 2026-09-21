@@ -239,3 +239,25 @@ in `src/core/*`) rather than living only in one agent's private memory.
   wires tilling/planting into the RMB handler, instant crop harvest into the LMB
   handler, and `tickCrops` into the per-frame loop (B4 §-tests in
   `test/b4.test.js`).
+
+## B5 — Water core & ocean content (crit 14, 15)
+
+- **Blocks/items**: ocean blocks 52..57 (coral_block, coral_plant, kelp,
+  seagrass, iceberg, treasure_chest) and items 119/200/201 (treasure_map, coral,
+  prismarine_shard). Note: renumbered to free ids on Phase B2 integration to
+  avoid collision with Phase-B blocks 36-51 and items 120-136. Sources
+  `src/core/blocks.js`.
+- **Water mechanics** (`src/core/water.js`): head-in-water detection, oxygen
+  bar with underwater depletion / in-air regeneration, drowning damage once the
+  bar empties (scaled by difficulty), sprint-swim speed, reduced underwater
+  visibility, 1x1 waterway passability, buoyant drops (water drag + float-to-
+  surface), and underwater block breaks fill the cell with water (no erroneous
+  air pockets).
+- **Ocean worldgen** (`src/core/worldgen.js`): deterministic kelp/seagrass/coral
+  placement in the water column and iceberg shelves in cold oceans — additive,
+  does not change the land heightmap/fingerprint.
+- **Structures** (`src/core/structures.js`): per-(seed,chunk) deterministic
+  shipwrecks, underwater ruins and buried treasure; a treasure_map reveals and
+  the chest drops a mineable reward (coral + prismarine + diamond).
+- **Integration**: `src/main.js` applies ocean structures per loaded chunk,
+  draws O2/HP bars in the HUD, and switches fog/background underwater.
