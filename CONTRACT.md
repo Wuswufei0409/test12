@@ -153,3 +153,27 @@ in `src/core/*`) rather than living only in one agent's private memory.
 - **Integration**: `src/main.js` wires A2 chunk streaming + A3 player loop + A4
   mechanics; mined/placed chunks (3x3 neighbourhood) rebuild their mesh from
   `WorldState` (`src/render/worldmesh.js`).
+
+## 10. Farming (added B4)
+
+- **Farmland**: right-click dirt/grass with a hoe (`wooden_hoe 216`, `stone_hoe
+  217`, `iron_hoe 218`, crafted via hoe recipes) turns the block into farmland
+  (`farmland 36`, solid). Farming logic lives in `src/core/farming.js`.
+- **Crops & planting**: wheat seeds `220`, carrot `221`, potato `222` each map
+  to a crop (`CROP_SEED_ITEM`). Right-click an existing farmland block with a
+  seed plants the stage-0 crop in the cell above. Crops are non-solid (walkable,
+  instant-harvest) with growth encoded in block ids:
+  wheat `40..43`, carrot `44..47`, potato `48..51` (4 stages each).
+- **Growth over ticks**: `tickCrops(crops, world, dt, light)` advances a
+  runtime `Map<"x,y,z",{type,age}>` each frame by sim-time under a light factor
+  (0..1 from the solar clock). Growth rate = `age * (0.35 + 0.65*light)` over
+  `FARM.growSeconds`, so crops grow faster in daylight and can be verified over
+  world ticks. A crop dies (removed) if its support is no longer farmland.
+- **Harvest**: left-click harvests instantly (`harvestDrops`). Mature crops drop
+  the vegetable (`wheat 106` + a seed for wheat); immature crops return only the
+  seed/vegetable. Carrot/potato are edible (`food: 2`/`1`); wheat feeds the B1
+  `bread` recipe — the B4 "grow -> harvest -> food prep" loop.
+- **Integration**: `src/main.js` seeds the starter kit with a hoe + seeds and
+  wires tilling/planting into the RMB handler, instant crop harvest into the LMB
+  handler, and `tickCrops` into the per-frame loop (B4 §-tests in
+  `test/b4.test.js`).
