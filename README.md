@@ -41,31 +41,34 @@ LICENSE         # MIT license
 NOTICE.md       # unofficial-project & asset-origin notice
 ```
 
-## Project state (Phase A)
+## Project state
 
-This milestone delivers the **backbone only**:
+Delivered so far:
 
-- Vite + Three.js scaffold that builds cleanly and renders a voxel ground.
-- Deterministic seeded world-gen primitives (mulberry32 RNG, heightmap,
-  biomes, terrain fingerprint).
-- Core-logic unit tests + fixed-seed smoke test.
-- CI (GitHub Actions): build + core tests + fixed-seed smoke + Pages deploy.
-- Public HTTPS deployment on GitHub Pages.
-- `CONTRACT.md` defining shared cross-module contracts.
+- **Phase A backbone:** Vite+Three.js scaffold, CI (build + core tests +
+  fixed-seed smoke + Pages deploy), public HTTPS on GitHub Pages,
+  `CONTRACT.md` shared contracts.
+- **A2 world generation & rendering:** deterministic seeded value-noise world
+  with **8 biomes** (plains, forest, desert, mountains + cold/warm/deep/shallow
+  oceans), chunk generation/load/unload streaming, merged mesh voxel rendering
+  with face culling, procedural pixel-texture atlas (original art), first-person
+  3D view, day/night sky + fog, crosshair, hotbar/HUD overlay, and a
+  reproducible fixed-seed terrain fingerprint/sample.
 
-The full 20-standard gameplay scope (mining/building, inventory, crafting,
-survival, mobs, ocean/aquatic content, trident, saving, performance
-benchmarking, final acceptance) is out of scope for this issue and is tracked
-in later issues. See **Known limits** below.
+Playable survival systems (mining/placing, inventory, crafting, mobs, ocean
+content, trident, saving, performance benchmarking) are tracked by later issues.
+See **Known limits** below.
 
-## Known limits (Phase A)
+## Known limits
 
-1. Rendering is a minimal flat voxel ground — no chunk streaming, LOD, or
-   block interaction yet.
-2. No player controls, physics, or collision yet.
-3. No survival/combat/crafting/inventory logic.
-4. No persistence; save format is contracted but not yet used by runtime.
-5. Performance benchmark (standard 19) not yet measured (no meaningful scene).
+1. Player locomotion/collision are **not** implemented here (A3's scope); a
+   pointer-lock free-fly camera is provided for reviewing the generated world.
+2. No physics, survival, combat, crafting, or inventory logic yet.
+3. Oceans render as their sea floor; water/sky is a tinted background, not a
+   translucent liquid mesh.
+4. No persistence; the save format is contracted but not yet used by runtime.
+5. Performance benchmark (standard 19) not yet measured (gameplay systems
+   absent).
 
 ## License & assets
 

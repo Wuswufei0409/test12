@@ -53,10 +53,20 @@ in `src/core/*`) rather than living only in one agent's private memory.
   (`seededRandom`) in `src/core/rng.js`; `hashSeed` folds a string seed into a
   uint32.
 - The same seed must reproduce identical terrain. Reproducibility is verified
-  by a **terrain fingerprint** (fixed-coordinate height sequence) in
+  by a **terrain fingerprint** (fixed-coordinate height sequence) **and** a
+  **fixed-coordinate biome+height sample** in
   `test/smoke/fixed-seed.test.js`.
 - Default / benchmark seed: `test12-phase-a`.
-- Biome tags (Phase A): `plains, forest, desert, mountains`.
+- **Biome tags (Phase A, A2):** `plains, forest, desert, mountains, cold_ocean,
+  warm_ocean, deep_ocean, shallow_ocean`. Oceans are water-filled to
+  `SEA_LEVEL = 32`. Land/ocean and temperature/humidity derive from layered
+  value noise (`src/core/terrain.js#columnAt`).
+- **Chunk world generation:** `src/core/worldgen.js#generateChunk(seed, cx, cz)`
+  returns an immutable `Uint8Array` of block ids (`chunkSize×chunkHeight×
+  chunkSize`). `blockAt(seed, x, y, z)` samples any world position from cached
+  columns; the same seed yields identical chunk data. A **land-spawn fallback**
+  `findLandSpawn(seed)` snaps the player to the nearest non-ocean column so the
+  first-person view is above ground even when the nominal origin is ocean.
 
 ## 6. Save format (Phase A baseline)
 

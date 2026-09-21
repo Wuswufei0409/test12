@@ -19,13 +19,22 @@ unit-tested headlessly and reused across renderers.
 src/core/rng.js        seeded PRNG (mulberry32) + string hash
 src/core/world.js      WORLD/TIME/DIFFICULTY constants + time conversion
 src/core/blocks.js     block/item ID registry (single source of truth)
-src/core/terrain.js    deterministic heightmap + biomes + fingerprint
+src/core/terrain.js    deterministic value noise + 8 biomes + heightmap +
+                       column cache + fixed-seed fingerprint/sample
+src/core/worldgen.js   deterministic chunk worldgen (blockAt, generateChunk,
+                       chunk column cache)
         ^
-        +-- used by -- src/main.js (renderer) and test/*
+        +-- used by -- src/main.js (renderer), src/render/*, test/*
+src/render/atlas.js    procedural pixel-texture atlas (original, generated)
+src/render/chunkmesh.js merged chunk geometry with face culling
 ```
 
-- `main.js` is the only browser-coupled module (sets up the Three.js scene
-  and renders the voxel ground). It consumes `src/core/*`.
+- `main.js` is the only browser-coupled module: sets up the Three.js scene,
+  streams chunks around the camera (load/unload by view distance), renders sky
+  + fog, and draws the crosshair/hotbar/HUD overlay. It consumes `src/core/*`
+  and `src/render/*`.
+- Chunk meshing reads the precomputed chunk array for interior face culling and
+  samples `blockAt` only at chunk borders, keeping determinism with low cost.
 - Cross-module contracts live in `CONTRACT.md` and are mirrored by
   `src/core/*` constants; tests assert determinism / invariants.
 
