@@ -58,11 +58,10 @@ survival, mobs, ocean/aquatic content, trident, saving, performance
 benchmarking, final acceptance) is out of scope for this issue and is tracked
 in later issues. See **Known limits** below.
 
-## Known limits (Phase A)
+## Known limits (Phase A / A1–A3)
 
-1. Rendering is a minimal flat voxel ground — no chunk streaming, LOD, or
-   block interaction yet.
-2. No player controls, physics, or collision yet.
+1. Rendering is a block-color voxel arena — no chunk streaming, LOD, textures, or block interaction yet.
+2. Player control implemented (pointer lock, WASD, jump/sprint/sneak/swim, AABB collision, step-up) but no mining/building/pickup.
 3. No survival/combat/crafting/inventory logic.
 4. No persistence; save format is contracted but not yet used by runtime.
 5. Performance benchmark (standard 19) not yet measured (no meaningful scene).
