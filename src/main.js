@@ -22,6 +22,9 @@ import { getAtlasTexture, tileUV, TILES } from './render/atlas.js';
 import { recipeBook } from './core/crafting.js';
 import { daylight, isNight, timeLabel, phase, nextDawn } from './core/daycycle.js';
 import { createLiving, eatSelected, tickMetabolism, applyDamage, trackFall, foodValue } from './core/living.js';
+import { MOBS, createMob, stepMob, damageMob, mobDrops, groundHeight, MOB_HEIGHT } from './core/mobs.js';
+import { explode } from './core/explosion.js';
+import { weaponStats, resolveMelee, armorReduction, armorSlot, COMBAT } from './core/combat.js';
 
 // Recipe book UI (toggle with B)
 const recipePanel = document.getElementById('recipe-book');
@@ -112,6 +115,174 @@ let worldTime = 0; // absolute sim ticks; tick 0 = 6:00 day 1
 let respawnTimer = 0;
 let sleepingMsg = null;
 let sleepMsgTimer = 0;
+
+// ---------- mobs + combat (B3) ----------
+const mobs = [];
+const PASSIVE_TYPES = ['pig', 'cow', 'sheep', 'chicken'];
+const HOSTILE_TYPES = ['zombie', 'spider', 'creeper'];
+let mobTimer = 0;       // spawn / upkeep accumulator (ticks)
+const MAX_MOBS = 40;
+let meleeCooldown = 0;  // ticks until next swing
+let equipped = [];      // armor item ids currently worn
+let hitFeedback = null; // {amount, time} rendered for a short while
+let hitFeedbackTimer = 0;
+
+const mobGeo = new THREE.BoxGeometry(0.6, 0.9, 0.6);
+const mobMatCache = new Map();
+function mobMaterial(color) {
+  if (!mobMatCache.has(color)) mobMatCache.set(color, new THREE.MeshLambertMaterial({ color }));
+  return mobMatCache.get(color);
+}
+const mobMeshes = new Map(); // mob -> Mesh
+function renderMobs() {
+  // remove meshes for dead/despawned mobs
+  for (const [m, mesh] of mobMeshes) {
+    if (!m.alive) { scene.remove(mesh); mobMeshes.delete(m); }
+  }
+  for (const m of mobs) {
+    if (!m.alive) continue;
+    let mesh = mobMeshes.get(m);
+    if (!mesh) {
+      mesh = new THREE.Mesh(mobGeo, mobMaterial(MOBS[m.type].color));
+      scene.add(mesh);
+      mobMeshes.set(m, mesh);
+    }
+    mesh.position.set(m.x, m.y + MOB_HEIGHT * 0.4, m.z);
+    // creeper flashes as it fuses
+    if (m.type === 'creeper' && m.fuse > 0) {
+      mesh.material.color.set(Math.floor(m.fuse) % 2 === 0 ? 0xffffff : 0x4a9a3c);
+    } else {
+      mesh.material.color.set(MOBS[m.type].color);
+    }
+    mesh.visible = true;
+  }
+}
+
+// Spawn a mob near a ground position if within loaded chunks and under cap.
+function trySpawnMob() {
+  if (mobs.length >= MAX_MOBS) return;
+  const angle = Math.random() * Math.PI * 2;
+  const dist = 14 + Math.random() * 22;
+  const gx = player.pos.x + Math.cos(angle) * dist;
+  const gz = player.pos.z + Math.sin(angle) * dist;
+  const gy = groundHeight(world, gx, gz);
+  const type = pickMobType();
+  const m = createMob(type, gx, gy, gz);
+  mobs.push(m);
+}
+function pickMobType() {
+  const night = isNight(worldTime);
+  const pool = [...PASSIVE_TYPES];
+  if (difficulty !== 'peaceful' && night) pool.push(...HOSTILE_TYPES);
+  else if (difficulty !== 'peaceful' && Math.random() < 0.25) pool.push(...HOSTILE_TYPES); // some daytime hostiles
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+// Player attacks the mob the crosshair would hit (nearest mob along aim within a cone/range).
+function aimedMob() {
+  const dir = cameraDirection(player.yaw, player.pitch);
+  const eye = { x: player.pos.x, y: player.pos.y + P.eyeHeight, z: player.pos.z };
+  let best = null, bestT = Infinity;
+  for (const m of mobs) {
+    if (!m.alive) continue;
+    const mx = m.x, my = m.y + MOB_HEIGHT * 0.5, mz = m.z;
+    const ox = mx - eye.x, oy = my - eye.y, oz = mz - eye.z;
+    const t = ox * dir.x + oy * dir.y + oz * dir.z;
+    if (t < 0 || t > 6) continue;
+    const closest = Math.hypot(ox - dir.x * t, oy - dir.y * t, oz - dir.z * t);
+    if (closest < 0.9 && t < bestT) { best = m; bestT = t; }
+  }
+  return best;
+}
+
+function meleeSwing(m) {
+  const sel = inventory.selectedStack();
+  const stats = weaponStats(sel.count > 0 ? sel.id : null);
+  const res = resolveMelee(player, m, sel.count > 0 ? sel.id : null, meleeCooldown, equipped);
+  if (res === null) return; // on cooldown
+  if (!res.hit) return; // out of range / miss
+  const dm = damageMob(m, res.damage, res.knockback);
+  meleeCooldown = res.feedback.cooldown;
+  hitFeedback = res.feedback;
+  hitFeedbackTimer = 20;
+  if (dm.killed) killMob(m);
+  // durability: swords wear down; break removes item (hand stays)
+  if (sel.count > 0 && weaponStats(sel.id) !== COMBAT.HAND_DAMAGE) {
+    const wd = (stackDurability.get(sel) || 60) - 1;
+    stackDurability.set(sel, wd);
+    if (wd <= 0) { inventory.takeSelected(1); refreshHeldItem(); }
+  }
+}
+
+const stackDurability = new Map(); // inventory stack -> remaining durability
+
+// --- bow / arrows (crit 12 ranged combat) ---
+const arrows = []; // {x,y,z, vx,vy,vz, age, alive}
+const arrowGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.5, 6);
+const arrowMat = new THREE.MeshLambertMaterial({ color: 0xd8d8d8 });
+const arrowMeshes = new Map();
+const ARROW_SPEED = 34;
+const ARROW_LIFE = 3.5; // seconds before despawn
+
+function fireBow() {
+  const sel = inventory.selectedStack();
+  if (sel.id !== ITEMS.bow?.id && sel.id !== 103) return; // only bow fires
+  if (sel.count <= 0) return;
+  const dir = cameraDirection(player.yaw, player.pitch);
+  const eye = { x: player.pos.x, y: player.pos.y + P.eyeHeight, z: player.pos.z };
+  arrows.push({
+    x: eye.x + dir.x * 0.4, y: eye.y + dir.y * 0.4, z: eye.z + dir.z * 0.4,
+    vx: dir.x * ARROW_SPEED, vy: dir.y * ARROW_SPEED, vz: dir.z * ARROW_SPEED,
+    age: 0, alive: true,
+  });
+  // needs an arrow in the inventory too; else just visual shot without consume
+  for (let i = 0; i < inventory.stacks.length; i++) {
+    if (inventory.stacks[i].id === 104 && inventory.stacks[i].count > 0) {
+      inventory.stacks[i].count -= 1;
+      break;
+    }
+  }
+  refreshHeldItem();
+}
+
+function stepArrows(dt) {
+  for (const a of arrows) {
+    a.age += dt;
+    if (a.age > ARROW_LIFE) { a.alive = false; continue; }
+    a.x += a.vx * dt; a.y += a.vy * dt; a.z += a.vz * dt;
+    // hit a mob
+    for (const m of mobs) {
+      if (!m.alive) continue;
+      const dx = m.x - a.x, dy = (m.y + MOB_HEIGHT * 0.5) - a.y, dz = m.z - a.z;
+      if (Math.hypot(dx, dy, dz) < 0.7) {
+        const dm = damageMob(m, COMBAT.BOW_DAMAGE, { x: a.vx * 0.02, z: a.vz * 0.02 });
+        hitFeedback = { amount: COMBAT.BOW_DAMAGE }; hitFeedbackTimer = 20;
+        a.alive = false;
+        if (dm.killed) killMob(m);
+        break;
+      }
+    }
+    // hit a solid block (rough surface check)
+    if (world.isSolid(Math.floor(a.x), Math.floor(a.y), Math.floor(a.z))) a.alive = false;
+  }
+  // cull dead arrows + render
+  for (let i = arrows.length - 1; i >= 0; i--) { if (!arrows[i].alive) arrows.splice(i, 1); }
+  for (const [a, mesh] of arrowMeshes) { if (!a.alive) { scene.remove(mesh); arrowMeshes.delete(a); } }
+  for (const a of arrows) {
+    let mesh = arrowMeshes.get(a);
+    if (!mesh) { mesh = new THREE.Mesh(arrowGeo, arrowMat); scene.add(mesh); arrowMeshes.set(a, mesh); }
+    mesh.position.set(a.x, a.y, a.z);
+    mesh.lookAt(a.x + a.vx, a.y + a.vy, a.z + a.vz);
+  }
+}
+
+function killMob(m) {
+  const ds = mobDrops(m);
+  for (const d of ds) {
+    const drop = createDrop(m.x, m.y + 0.4, m.z, d.id, d.count);
+    drops.push(drop);
+  }
+}
 
 // ---------- chunk streaming (A2) but meshed from the mutable world ----------
 const chunkMeshes = new Map(); // "cx,cz" -> THREE.Mesh
@@ -348,6 +519,17 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyF' && target && target.id === BLOCKS.bed.id) {
     sleepNow();
   }
+  // G = equip/unequip selected armor piece.
+  if (e.code === 'KeyG') {
+    const sel = inventory.selectedStack();
+    const slot = sel.count > 0 ? armorSlot(sel.id) : null;
+    if (slot) {
+      equipped = equipped.filter((id) => armorSlot(id) !== slot);
+      equipped.push(sel.id);
+      inventory.takeSelected(1);
+      refreshHeldItem();
+    }
+  }
 });
 window.addEventListener('wheel', (e) => {
   const delta = Math.sign(e.deltaY);
@@ -454,6 +636,19 @@ function drawHUD() {
     bY += bH + 5;
     drawBar(bY, living.air / living.maxAir, '#4dabf7');
     ctx.fillText('Oxygen', bX + bW + 8, bY + 9);
+  }
+  // Armor bar (B3): total armor points from equipped pieces.
+  if (equipped.length > 0) {
+    const pts = equipped.reduce((n, id) => n + (COMBAT.ARMOR[id] ? COMBAT.ARMOR[id].armorPoints : 0), 0);
+    bY += bH + 5;
+    drawBar(bY, Math.min(1, pts / 20), '#a678d8');
+    ctx.fillText(`Armor ${pts}`, bX + bW + 8, bY + 9);
+  }
+  // Hit feedback (B3): brief damage amount flash when landing a swing.
+  if (hitFeedbackTimer > 0 && hitFeedback) {
+    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    ctx.font = 'bold 20px system-ui';
+    ctx.fillText(`-${hitFeedback.amount}`, w / 2 + 24, h / 2 - 10);
   }
 
   // Time / phase / difficulty (top-right).
@@ -583,6 +778,56 @@ function animate() {
   }
   renderDrops();
 
+  // --- B3 mobs: step AI, creeper explosions, melee attacks ---
+  if (meleeCooldown > 0) meleeCooldown -= dt;
+  if (hitFeedbackTimer > 0) hitFeedbackTimer -= dt;
+  mobTimer += dt;
+  if (mobTimer > 60) { mobTimer = 0; trySpawnMob(); }
+
+  // LMB is mining when targeting a block, melee when targeting a mob.
+  const mobTarget = aimedMob();
+  const selId = inventory.selectedStack().id;
+  const holdingBow = selId === 103;
+  if (lmb && input.isLocked()) {
+    if (holdingBow) { fireBow(); }       // bow fires in aim direction
+    else if (!target && mobTarget) { meleeSwing(mobTarget); }
+  }
+
+  for (const m of [...mobs]) {
+    if (!m.alive) continue;
+    player.alive = living.alive; // expose survival alive to mob AI
+    const ev = stepMob(m, world, player, dt * WORLD.tickRateHz, difficulty);
+    for (const e of ev) {
+      if (e.attack && e.attack.target === 'player' && living.alive) {
+        // armor reduces incoming damage
+        const reduction = armorReduction(equipped);
+        applyDamage(living, e.attack.damage * (1 - reduction), { type: 'hostile', difficulty });
+      }
+      if (e.explode) {
+        // creeper explosion modifies the world + damages nearby player & mobs
+        const dropped = explode(world, e.explode.x, e.explode.y, e.explode.z, e.explode.radius);
+        markEdited(Math.floor(e.explode.x), Math.floor(e.explode.y), Math.floor(e.explode.z));
+        for (const id of dropped) drops.push(createDrop(e.explode.x, e.explode.y, e.explode.z, id));
+        const pDist = Math.hypot(player.pos.x - e.explode.x, player.pos.z - e.explode.z);
+        if (pDist < e.explode.radius + 1.5 && living.alive) {
+          const dmg = (e.explode.radius + 1.5 - pDist) * 4;
+          applyDamage(living, Math.max(1, dmg), { type: 'hostile', difficulty });
+        }
+      }
+    }
+    // knockback impulse integration
+    if (Math.abs(m.vx) > 0.001 || Math.abs(m.vz) > 0.001) {
+      m.x += m.vx * dt;
+      m.z += m.vz * dt;
+      m.vx *= 0.9; m.vz *= 0.9;
+    }
+    if (!m.alive) killMob(m);
+  }
+  // prune dead/despawned mobs
+  for (let i = mobs.length - 1; i >= 0; i--) if (!mobs[i].alive) mobs.splice(i, 1);
+  renderMobs();
+  stepArrows(dt);
+
   // --- day/night lighting (B2): sun + ambient follow the solar clock ---
   const day = daylight(worldTime);
   const night = isNight(worldTime);
@@ -618,8 +863,4 @@ animate();
 window.addEventListener('keydown', (e) => { if (e.code === 'KeyB') recipePanel.hidden = !recipePanel.hidden; });
 
 hudState.textContent =
-<<<<<<< HEAD
-  `seed=${seed} · click to capture mouse · LMB mine · RMB place · 1-9/wheel select · B recipes`;
-=======
-  `seed=${seed} · generating world… · click to capture mouse · LMB mine · RMB eat/place · 1-9/wheel select · F sleep on bed`;
->>>>>>> origin/MUL-93-b2-survival
+  `seed=${seed} · click to capture mouse · LMB mine · RMB place/eat · 1-9/wheel select · B recipes · F sleep`;

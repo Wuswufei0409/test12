@@ -182,3 +182,36 @@ in `src/core/*`) rather than living only in one agent's private memory.
 - **HUD**: health/hunger/oxygen bars, day+phase+difficulty readout, death
   overlay + respawn banner; RMB eats food when the selected slot is edible,
   else places.
+
+## 11. Land mobs & combat gear (added B3)
+
+- **Mob registry** (`src/core/mobs.js`): pig/cow/sheep/chicken (passive),
+  zombie/spider/creeper (hostile). A mob is a plain object with
+  `{type, x,y,z (feet), vy, health, alive, passive, aggro, hurtTicks,
+  attackCooldown, fuse}`. `createMob(type,x,y,z)` spawns; `stepMob` advances one
+  tick; `damageMob(mob, amt, {x,z})` applies damage + knockback, sets
+  `alive=false` at 0 HP; `mobDrops(mob)` returns configured drops.
+- **Behaviours**: passive mobs wander or flee when hurt; hostiles wander until a
+  player is within 14 blocks, then chase and melee-attack in range (attack gets a
+  cooldown). Creeper walks up, fuses for `fuse=30` ticks, then emits
+  `{explode:{x,y,z,radius:3}}` — the caller carves the world via
+  `explode()` (`src/core/explosion.js`) which removes voxels in a radius-3 sphere
+  (skipping unbreakable blocks, e.g. bedrock) and returns dropped item ids.
+- **Difficulty gating**: `DIFFICULTY.peaceful.hostileSpawn=false`; hostile spawn
+  is gated to night (plus a small daytime chance) and damage scales via
+  `difficultyOf(name).damageScale` (peaceful→0, easy→0.5, normal→1).
+- **Mob drops** (item ids, `src/core/blocks.js`): raw_porkchop 120, raw_beef 121,
+  raw_mutton 122, raw_chicken 123, rotten_flesh 124, string 125, gunpowder 126,
+  leather 127, wool 128. Passive mobs drop 1 of each configured drop; hostiles
+  drop with a 1/8 chance. Food values let meat be eaten via the B2 system.
+- **Combat gear** (`src/core/combat.js`): swords wood/stone/iron (ids 100/101/102,
+  melee dmg 4/5/6, range 2.6/3.0/3.4), bow 103 (fires arrows, dmg 6, max range
+  48), arrow 104. `weaponStats(id)` returns per-material stats; `resolveMelee`
+  honours range + cooldown and reports `{hit, damage, knockback, feedback}`.
+- **Armor** (ids 129–136: leather/iron helmet/chest/leggings/boots; armor points
+  1/3/2/1 and 2/6/5/2): `armorReduction(equippedIds)` returns
+  `points/(points+20)` damage fraction; the player wears up to one per slot
+  (helmet/chest/leggings/boots). Press `G` to equip/unequip the selected piece.
+- **Durability**: swords/armor wear with use; a broken tool item is consumed from
+  the hotbar (hand has no tool loss). Melee `/ arrow hits and bow shots are
+  accompanied by a short HUD damage flash (observable hit feedback).
