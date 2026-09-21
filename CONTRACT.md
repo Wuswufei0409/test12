@@ -101,3 +101,35 @@ in `src/core/*`) rather than living only in one agent's private memory.
 
 - Releases are tagged and CI builds are immutable per commit.
 - The deploy is GitHub Pages at `https://Wuswufei0409.github.io/test12/`.
+
+## 9. Mining, placement, drops & inventory (added A4)
+
+- **World edits** are an overlay on deterministic terrain: `WorldState`
+  (`src/core/worldstate.js`) answers `get(x,y,z)` from an edit Map first, else
+  the pure A2 generator. With no edits it is byte-identical to worldgen
+  (determinism preserved). It also implements the A3 collider contract
+  (`isSolid`/`isLiquid`), so the same object drives meshing and player physics.
+- **Targeting**: `raycastBlock` (DDA voxel traversal, `src/core/targeting.js`) or
+  the crosshair; returns the hit block `{x,y,z}` and place cell `{nx,ny,nz}` on
+  the near face within `maxDist = 6`.
+- **Breaking**: block hardness drives break time — `breakTime = hardness*1.5 +
+  0.1`s by hand (`src/core/breaking.js`). `hardness < 0` / `unbreakable` /
+  non-solid / liquid never break. Progress accumulates while the crosshair holds
+  the block and resets on retarget.
+- **Drops**: `dropForBlock` maps a mined block to an item id. Most breakable
+  solid blocks drop themselves (so mining -> inventory -> placing is a real
+  loop); `grass->dirt`, `coal_ore->coal`, `iron_ore->iron_ingot`, an
+  `leaves`/`diamond_ore` drop nothing. Drops are physics entities
+  (`src/core/drops.js`) with gravity, ground friction/rest, and shelf life;
+  picked up when the player AABB overlaps them.
+- **Hotbar / inventory**: 9 hotbar slots (`HOTBAR_SIZE`, `src/core/inventory.js`).
+  Items stack to `stack` limit (blocks and items default 64; tools/weapons 1).
+  Adding first stacks partial slots then fills empties; leftover is returned.
+  Selected slot drives placement; `1-9` keys / mouse wheel select.
+- **Placement**: right-click places the selected hotbar block at the near-face
+  cell when (a) it is air, (b) the selected slot holds a solid, non-liquid
+  placeable block, (c) the cell does not overlap the player AABB. One item is
+  consumed per placement.
+- **Integration**: `src/main.js` wires A2 chunk streaming + A3 player loop + A4
+  mechanics; mined/placed chunks (3x3 neighbourhood) rebuild their mesh from
+  `WorldState` (`src/render/worldmesh.js`).

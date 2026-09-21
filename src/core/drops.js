@@ -4,6 +4,7 @@
 // up into the hotbar by walking near it. `dropForBlock` maps a mined block to
 // the item that drops so most blocks flow mine -> inventory -> place.
 import { getBlockById, BLOCKS, ITEMS } from './blocks.js';
+import { PLAYER } from './physics.js';
 
 const bid = (name) => {
   const b = BLOCKS[name];
@@ -41,7 +42,7 @@ export function dropForBlock(blockId) {
 
 const GRAVITY = 9.8; // m/s^2
 const RESTITUTION = 0.45;
-const DROP_RADIUS = 0.35; // pick-up attraction radius (m)
+const PICKUP_MARGIN = 0.25; // expand the player box by this when picking up
 const MAX_AGE = 180; // seconds before despawning
 
 /**
@@ -92,10 +93,10 @@ export function stepDrop(drop, world, dt) {
   } else {
     drop.x = nx;
   }
-  // Vertical: fall until resting on a solid surface.
+  // Vertical: fall until resting on the top of the solid cell below.
   if (world.isSolid(Math.floor(drop.x), Math.floor(ny - 0.2), Math.floor(drop.z))) {
     drop.vy = 0;
-    drop.y = Math.floor(drop.y) + 0.5;
+    drop.y = Math.floor(ny - 0.2) + 1.0; // rest on the surface of the cell below
     grounded = true;
   } else {
     drop.y = ny;
@@ -113,12 +114,18 @@ export function stepDrop(drop, world, dt) {
 }
 
 /**
- * True when the player centre is within pickup radius of the drop.
- * `playerPos` = {x,y,z} (feet/eye centre is fine for 1.8m box).
+ * True when the drop overlaps the player's AABB (expanded by a small pickup
+ * margin), i.e. the player can walk over / touch it to collect.
+ * `playerPos` = {x,y,z} feet position.
  */
-export function canPickup(drop, playerPos, radius = DROP_RADIUS) {
-  const dx = playerPos.x - drop.x;
-  const dy = playerPos.y + 0.9 - drop.y;
-  const dz = playerPos.z - drop.z;
-  return Math.sqrt(dx * dx + dy * dy + dz * dz) <= radius;
+export function canPickup(drop, playerPos) {
+  const hx = PLAYER.width / 2 + PICKUP_MARGIN;
+  const y0 = playerPos.y - PICKUP_MARGIN;
+  const y1 = playerPos.y + PLAYER.height + PICKUP_MARGIN;
+  return (
+    Math.abs(drop.x - playerPos.x) <= hx &&
+    Math.abs(drop.z - playerPos.z) <= hx &&
+    drop.y >= y0 &&
+    drop.y <= y1
+  );
 }

@@ -47,9 +47,11 @@ export function raycastBlock(world, origin, dir, maxDist = 6) {
         faceX,
         faceY,
         faceZ,
-        nx: x + faceX,
-        ny: y + faceY,
-        nz: z + faceZ,
+        // The face the ray entered points back at the viewer; the legal place
+        // cell is the empty cell adjacent on the near side (x - face*).
+        nx: x - faceX,
+        ny: y - faceY,
+        nz: z - faceZ,
       };
     }
 

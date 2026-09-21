@@ -26,15 +26,25 @@ src/core/worldgen.js   deterministic chunk worldgen (blockAt, generateChunk,
         ^
         +-- used by -- src/main.js (renderer), src/render/*, test/*
 src/render/atlas.js    procedural pixel-texture atlas (original, generated)
-src/render/chunkmesh.js merged chunk geometry with face culling
+src/render/chunkmesh.js merged chunk geometry with face culling (A2, pure)
+src/render/worldmesh.js merged chunk geometry reading a mutable WorldState (A4)
+src/core/worldstate.js  A4 edit-overlay world (mine/place) over A2 terrain; also
+                        the A3 collider (isSolid/isLiquid)
+src/core/targeting.js   DDA voxel raycast (crosshair target + place cell)
+src/core/breaking.js    hardness-based break time + progress
+src/core/inventory.js   9-slot hotbar with stacking + selection
+src/core/drops.js       block->item drop table + drop physics + pickup
 ```
 
 - `main.js` is the only browser-coupled module: sets up the Three.js scene,
-  streams chunks around the camera (load/unload by view distance), renders sky
-  + fog, and draws the crosshair/hotbar/HUD overlay. It consumes `src/core/*`
-  and `src/render/*`.
-- Chunk meshing reads the precomputed chunk array for interior face culling and
-  samples `blockAt` only at chunk borders, keeping determinism with low cost.
+  streams chunks around the player (load/unload by view distance), renders sky
+  + fog, runs the A3 player physics loop, and draws the crosshair/hotbar/HUD
+  overlay. It also wires A4 mining/placing/drop-pickup against the shared
+  `WorldState`. It consumes `src/core/*` and `src/render/*`.
+- Chunk meshing reads the precomputed chunk array (A2 `chunkmesh`) for pure
+  generation; `worldmesh` reads the mutable `WorldState` so mined/placed blocks
+  appear once the 3x3 chunk neighbourhood is rebuilt. Both sample neighbours
+  to cull interior faces and keep determinism with low cost.
 - Cross-module contracts live in `CONTRACT.md` and are mirrored by
   `src/core/*` constants; tests assert determinism / invariants.
 
