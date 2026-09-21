@@ -1,29 +1,35 @@
-// Phase A2 renderer: first-person 3D voxel world with chunk streaming
-// (load/unload by view distance), sky + fog, crosshair, first-person held item,
-// and an MBE-like HUD. Consumes src/core/* worldgen + the procedural pixel
-// texture atlas. Player locomotion/collision is A3's scope; here we provide a
-// pointer-lock camera for reviewing the generated world.
+// test12 — A4 integrated client: deterministic world (A2) + player control (A3)
+// + mine/place/drops/pickup/hotbar/inventory loop (A4).
+//
+// This is the browser entry point. Gameplay logic lives in headless-testable
+// src/core/* modules; this file only wires Three.js rendering, input, and the
+// shared mutable WorldState (which doubles as both the mesh source and the
+// A3 AABB-collider).
 import * as THREE from 'three';
 import { WORLD } from './core/world.js';
 import { findLandSpawn } from './core/terrain.js';
-import { CHUNK, generateChunk } from './core/worldgen.js';
-import { buildChunkMesh, solidMaterial } from './render/chunkmesh.js';
+import { CHUNK } from './core/worldgen.js';
+import { WorldState } from './core/worldstate.js';
+import { createPlayer, PLAYER as P } from './core/physics.js';
+import { createInput, createPlayerLoop, syncCamera } from './player.js';
+import { raycastBlock, cameraDirection } from './core/targeting.js';
+import { Breaking } from './core/breaking.js';
+import { createInventory, itemName, stackCapacity } from './core/inventory.js';
+import { dropForBlock, createDrop, stepDrop, canPickup } from './core/drops.js';
+import { getBlockById, BLOCKS, ITEMS } from './core/blocks.js';
+import { buildChunkMesh } from './render/worldmesh.js';
 import { getAtlasTexture, tileUV, TILES } from './render/atlas.js';
-import { BLOCKS } from './core/blocks.js';
 
 const app = document.getElementById('app');
 const hudState = document.getElementById('hud-state');
-const seed = WORLD.seed; // deterministic default
+const seed = WORLD.seed;
 
-// ---------- scene / camera ----------
+// ---------- scene / camera / renderer (A2) ----------
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87b5d9);
 scene.fog = new THREE.FogExp2(0x87b5d9, 0.008);
 
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 320);
-const landSpawn = findLandSpawn(seed);
-camera.position.set(landSpawn.x, landSpawn.y, landSpawn.z);
-camera.rotation.order = 'YXZ';
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -36,40 +42,60 @@ const sun = new THREE.DirectionalLight(0xfff5d7, 1.1);
 sun.position.set(40, 60, 20);
 scene.add(sun);
 
-// First-person held item (voxel hand/view). Attached to the camera so it stays
-// in the foreground; satisfies the first-person held-item requirement.
-const heldBox = new THREE.Mesh(
-  new THREE.BoxGeometry(0.42, 0.42, 0.42),
-  new THREE.MeshLambertMaterial({ map: getAtlasTexture() }),
-);
-// Map all faces to a single atlas tile (stone, id=1) so it reads as one voxel.
-const [hu0, hv0, hu1, hv1] = tileUV(1 % TILES);
-const heldGeo = heldBox.geometry;
-const uvAttr = heldGeo.attributes.uv;
-for (let i = 0; i < uvAttr.count; i++) {
-  const u = uvAttr.getX(i);
-  const v = uvAttr.getY(i);
-  uvAttr.setXY(i, hu0 + (hu1 - hu0) * u, hv0 + (hv1 - hv0) * v);
-}
-heldGeo.attributes.uv.needsUpdate = true;
-heldBox.position.set(0.55, -0.42, -0.7);
-camera.add(heldBox);
-scene.add(camera);
+// ---------- shared mutable world (A4) ----------
+const world = new WorldState(seed);
 
-// ---------- chunk streaming ----------
+// ---------- player (A3), spawned on land ----------
+const landSpawn = findLandSpawn(seed);
+const player = createPlayer(landSpawn.x, landSpawn.y, landSpawn.z, 0);
+const input = createInput(renderer.domElement, camera, player);
+const loop = createPlayerLoop(world, player, input); // WorldState is the collider
+syncCamera(camera, player);
+
+// ---------- first-person held item (reflects selected hotbar slot) ----------
+let heldMesh = null;
+function refreshHeldItem() {
+  if (heldMesh) {
+    camera.remove(heldMesh);
+    heldMesh.geometry.dispose();
+    heldMesh = null;
+  }
+  const stack = inventory.selectedStack();
+  const isBlock = getBlockById(stack.id).id !== 0;
+  if (stack.count > 0 && isBlock) {
+    heldMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.42, 0.42, 0.42),
+      new THREE.MeshLambertMaterial({ map: getAtlasTexture() }),
+    );
+    const geo = heldMesh.geometry;
+    const [hu0, hv0, hu1, hv1] = tileUV(stack.id % TILES);
+    const uvAttr = geo.attributes.uv;
+    for (let i = 0; i < uvAttr.count; i++) {
+      uvAttr.setXY(i, hu0 + (hu1 - hu0) * uvAttr.getX(i), hv0 + (hv1 - hv0) * uvAttr.getY(i));
+    }
+    geo.attributes.uv.needsUpdate = true;
+    heldMesh.position.set(0.55, -0.42, -0.7);
+    camera.add(heldMesh);
+  }
+}
+
+// ---------- inventory / hotbar (A4) ----------
+const inventory = createInventory(9);
+// Small starter kit so a tester can immediately place a few blocks.
+inventory.add(1, 8); // stone
+inventory.add(7, 8); // planks
+refreshHeldItem();
+
+// ---------- chunk streaming (A2) but meshed from the mutable world ----------
 const chunkMeshes = new Map(); // "cx,cz" -> THREE.Mesh
-const viewDist = 6; // benchmark standard
-const loadQueue = []; // pending chunks to build (built a few per frame)
+const viewDist = 6;
+const loadQueue = [];
+const dirtyChunks = new Set(); // rebuild these each frame (post-edit)
 const LOAD_PER_FRAME = 3;
-
-function chunkKey(cx, cz) {
-  return `${cx},${cz}`;
-}
+const chunkKey = (cx, cz) => `${cx},${cz}`;
 
 function loadChunk(cx, cz) {
-  // Force generation to validate determinism; discard, mesh reads via blockAt.
-  generateChunk(seed, cx, cz);
-  const geo = buildChunkMesh(seed, cx, cz);
+  const geo = buildChunkMesh(world, cx, cz);
   const mesh = new THREE.Mesh(geo, solidMaterial());
   mesh.position.set(cx * CHUNK.size, 0, cz * CHUNK.size);
   scene.add(mesh);
@@ -86,11 +112,9 @@ function unloadChunk(cx, cz) {
   }
 }
 
-// Recompute the wanted chunk set; enqueue missing chunks and unload distant
-// ones. Loading is spread across frames so the first paint is fast.
-function updateChunks() {
-  const pcx = Math.floor(camera.position.x / CHUNK.size);
-  const pcz = Math.floor(camera.position.z / CHUNK.size);
+function updateChunks(centre) {
+  const pcx = Math.floor(centre.x / CHUNK.size);
+  const pcz = Math.floor(centre.z / CHUNK.size);
   const wanted = new Set();
   for (let dx = -viewDist; dx <= viewDist; dx++) {
     for (let dz = -viewDist; dz <= viewDist; dz++) {
@@ -101,14 +125,12 @@ function updateChunks() {
       }
     }
   }
-  // Unload anything out of view.
   for (const key of chunkMeshes.keys()) {
     if (!wanted.has(key)) {
       const [cx, cz] = key.split(',').map(Number);
       unloadChunk(cx, cz);
     }
   }
-  // De-duplicate the queue while preserving new-ish order.
   const seen = new Set();
   loadQueue.splice(0, loadQueue.length, ...loadQueue.filter(([cx, cz]) => {
     const k = chunkKey(cx, cz);
@@ -127,26 +149,160 @@ function processLoadQueue() {
   }
 }
 
-// ---------- first-person pointer-lock camera (review aid; A3 owns locomotion) ----------
-const camState = { yaw: 0, pitch: 0, moving: {} };
-let locked = false;
+// Rebuild the 3x3 chunk neighbourhood around an edited block so cross-border
+// faces are re-culled correctly.
+function markEdited(x, y, z) {
+  const cx = Math.floor(x / CHUNK.size);
+  const cz = Math.floor(z / CHUNK.size);
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dz = -1; dz <= 1; dz++) {
+      dirtyChunks.add(chunkKey(cx + dx, cz + dz));
+    }
+  }
+}
 
-renderer.domElement.addEventListener('click', () => {
-  if (!locked) renderer.domElement.requestPointerLock();
-});
-document.addEventListener('pointerlockchange', () => {
-  locked = document.pointerLockElement === renderer.domElement;
-});
-document.addEventListener('mousemove', (e) => {
-  if (!locked) return;
-  camState.yaw -= e.movementX * 0.0025;
-  camState.pitch -= e.movementY * 0.0025;
-  camState.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, camState.pitch));
-});
-window.addEventListener('keydown', (e) => { camState.moving[e.code] = true; });
-window.addEventListener('keyup', (e) => { camState.moving[e.code] = false; });
+function processDirtyChunks() {
+  for (const key of dirtyChunks) {
+    const mesh = chunkMeshes.get(key);
+    if (!mesh) continue;
+    const [cx, cz] = key.split(',').map(Number);
+    const geo = buildChunkMesh(world, cx, cz);
+    mesh.geometry.dispose();
+    mesh.geometry = geo;
+  }
+  dirtyChunks.clear();
+}
 
-// ---------- HUD (canvas overlay, MBE-like) ----------
+let solidMat = null;
+function solidMaterial() {
+  if (!solidMat) solidMat = new THREE.MeshLambertMaterial({ map: getAtlasTexture() });
+  return solidMat;
+}
+
+// ---------- targeting + highlight ----------
+let target = null;
+const highlight = new THREE.LineSegments(
+  new THREE.EdgesGeometry(new THREE.BoxGeometry(1.002, 1.002, 1.002)),
+  new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.55 }),
+);
+highlight.visible = false;
+scene.add(highlight);
+
+function aim() {
+  const dir = cameraDirection(player.yaw, player.pitch);
+  const eye = { x: player.pos.x, y: player.pos.y + P.eyeHeight, z: player.pos.z };
+  return raycastBlock(world, eye, dir, 6);
+}
+
+// ---------- mining / placement (A4) ----------
+const breaking = new Breaking();
+let breakingFraction = 0; // per-frame smoothed progress for the HUD/overlay
+let mining = false;
+let placing = false;
+function breakAt(hit) {
+  const dropId = dropForBlock(hit.id);
+  world.set(hit.x, hit.y, hit.z, 0);
+  markEdited(hit.x, hit.y, hit.z);
+  if (dropId != null) {
+    const d = createDrop(hit.x, hit.y, hit.z, dropId);
+    drops.push(d);
+  }
+  hudState.textContent = `broken ${getBlockById(hit.id).name} @ ${hit.x},${hit.y},${hit.z}`;
+}
+
+function shiftAndReload() {
+  refreshHeldItem();
+}
+
+function isPlaceable(id) {
+  const b = getBlockById(id);
+  return !!b && b.id !== 0 && b.solid && !b.liquid;
+}
+
+// Player AABB overlap check for the placement cell (must not embed the player).
+function overlapsPlayer(x, y, z) {
+  const hx = P.width / 2;
+  const x0 = Math.floor(player.pos.x - hx);
+  const x1 = Math.floor(player.pos.x + hx);
+  const z0 = Math.floor(player.pos.z - hx);
+  const z1 = Math.floor(player.pos.z + hx);
+  const y0 = Math.floor(player.pos.y);
+  const y1 = Math.floor(player.pos.y + player.height - 1e-9);
+  return x >= x0 && x <= x1 && z >= z0 && z <= z1 && y >= y0 && y <= y1;
+}
+
+function placeAt(hit) {
+  const stack = inventory.selectedStack();
+  if (stack.count <= 0 || !isPlaceable(stack.id)) return;
+  const px = hit.nx;
+  const py = hit.ny;
+  const pz = hit.nz;
+  const existing = world.get(px, py, pz);
+  if (existing !== 0 || overlapsPlayer(px, py, pz)) return; // illegal: not air / inside player
+  inventory.takeSelected(1);
+  world.set(px, py, pz, stack.id);
+  markEdited(px, py, pz);
+  hudState.textContent = `placed ${getBlockById(stack.id).name} @ ${px},${py},${pz}`;
+  shiftAndReload();
+}
+
+// ---------- drops (A4) ----------
+const drops = [];
+const dropGeo = new THREE.BoxGeometry(0.28, 0.28, 0.28);
+const dropColorCache = new Map();
+function dropMaterial(id) {
+  if (!dropColorCache.has(id)) {
+    const b = getBlockById(id);
+    const item = Object.values(ITEMS).find((i) => i.id === id);
+    const color = b && b.id !== 0 ? b.color : item ? item.color : 0xbbbbbb;
+    dropColorCache.set(id, new THREE.MeshLambertMaterial({ color: color ?? 0xbbbbbb }));
+  }
+  return dropColorCache.get(id);
+}
+const dropMeshes = new Map(); // entity -> Mesh
+function renderDrops() {
+  for (const d of drops) {
+    let m = dropMeshes.get(d);
+    if (!m) {
+      m = new THREE.Mesh(dropGeo, dropMaterial(d.itemId));
+      scene.add(m);
+      dropMeshes.set(d, m);
+    }
+    m.position.set(d.x, d.y, d.z);
+    m.visible = d.alive;
+  }
+}
+
+// ---------- input wiring (A4 additions on top of A3 movement input) ----------
+let lmb = false;
+let rmb = false;
+document.addEventListener('mousedown', (e) => {
+  if (e.button === 0) lmb = true;
+  if (e.button === 2) rmb = true;
+});
+document.addEventListener('mouseup', (e) => {
+  if (e.button === 0) lmb = false;
+  if (e.button === 2) rmb = false;
+});
+document.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// Hotbar selection: number keys 1-9 and mouse wheel.
+window.addEventListener('keydown', (e) => {
+  if (e.code.startsWith('Digit')) {
+    const n = Number(e.code.slice(5));
+    if (n >= 1 && n <= inventory.size) {
+      inventory.select(n - 1);
+      refreshHeldItem();
+    }
+  }
+});
+window.addEventListener('wheel', (e) => {
+  const delta = Math.sign(e.deltaY);
+  inventory.select((inventory.selected + delta + inventory.size) % inventory.size);
+  refreshHeldItem();
+});
+
+// ---------- HUD (canvas overlay, family of the A2 HUD) ----------
 function buildHUD() {
   const canvas = document.createElement('canvas');
   canvas.id = 'hud-canvas';
@@ -155,15 +311,13 @@ function buildHUD() {
   canvas.style.pointerEvents = 'none';
   canvas.style.zIndex = '20';
   document.body.appendChild(canvas);
-  const ctx = canvas.getContext('2d');
-  return { canvas, ctx };
+  return { canvas, ctx: canvas.getContext('2d') };
 }
 const hud = buildHUD();
 const hudClock = new THREE.Clock();
-// Day/night offset: open the world near midday so the first view is bright.
 const DAY_OFFSET = 4000;
 
-function drawHUD(dt) {
+function drawHUD() {
   const ctx = hud.ctx;
   const w = (hud.canvas.width = window.innerWidth);
   const h = (hud.canvas.height = window.innerHeight);
@@ -174,54 +328,64 @@ function drawHUD(dt) {
   ctx.strokeStyle = 'rgba(255,255,255,0.9)';
   ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.moveTo(cx - 10, cy); ctx.lineTo(cx - 3, cy);
-  ctx.moveTo(cx + 3, cy); ctx.lineTo(cx + 10, cy);
-  ctx.moveTo(cx, cy - 10); ctx.lineTo(cx, cy - 3);
-  ctx.moveTo(cx, cy + 3); ctx.lineTo(cx, cy + 10);
+  for (const [dx, dy] of [[-1, 0], [0, -1], [1, 0], [0, 1]]) {
+    ctx.moveTo(cx + dx * 10, cy + dy * 10);
+    ctx.lineTo(cx + dx * 3, cy + dy * 3);
+  }
   ctx.stroke();
 
-  // Hotbar (9 slots)
-  const slotSize = 40;
+  // Hotbar (9 real inventory slots)
+  const slotSize = 42;
   const gap = 4;
-  const n = 9;
+  const n = inventory.size;
   const barW = n * slotSize + (n - 1) * gap;
   const bx = (w - barW) / 2;
-  const by = h - slotSize - 12;
+  const by = h - slotSize - 14;
   ctx.fillStyle = 'rgba(0,0,0,0.45)';
   ctx.fillRect(bx - 6, by - 6, barW + 12, slotSize + 12);
   ctx.strokeStyle = 'rgba(255,255,255,0.85)';
   ctx.lineWidth = 2;
   ctx.strokeRect(bx - 6, by - 6, barW + 12, slotSize + 12);
-  const blockIds = Object.values(BLOCKS).filter((b) => !b.item && b.id !== 0);
+
   for (let i = 0; i < n; i++) {
     const sx = bx + i * (slotSize + gap);
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
     ctx.fillRect(sx, by, slotSize, slotSize);
-    ctx.strokeStyle = i === 0 ? 'rgba(255,255,255,1)' : 'rgba(255,255,255,0.35)';
+    ctx.strokeStyle = i === inventory.selected ? 'rgba(255,255,255,1)' : 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = i === inventory.selected ? 3 : 1;
     ctx.strokeRect(sx, by, slotSize, slotSize);
-    const blk = blockIds[i % blockIds.length];
-    if (blk) {
-      const hex = blk.color ?? 0x888888;
-      ctx.fillStyle = `#${hex.toString(16).padStart(6, '0')}`;
-      ctx.fillRect(sx + 10, by + 10, 20, 20);
+
+    const s = inventory.stacks[i];
+    if (s.count > 0) {
+      const b = getBlockById(s.id);
+      const it = Object.values(ITEMS).find((x) => x.id === s.id);
+      const color = b && b.id !== 0 ? b.color : it ? it.color : 0x999999;
+      ctx.fillStyle = `#${(color ?? 0x999999).toString(16).padStart(6, '0')}`;
+      ctx.fillRect(sx + 9, by + 9, 24, 24);
+      ctx.fillStyle = 'rgba(255,255,255,0.95)';
+      ctx.font = 'bold 13px system-ui';
+      ctx.textAlign = 'right';
+      ctx.fillText(String(s.count), sx + slotSize - 4, by + slotSize - 5);
     }
   }
 
-  // Time of day label (solar clock from tick).
-  const t = hudClock.elapsedTime * 20;
-  const tod = (t + DAY_OFFSET) % WORLD.dayLengthTicks;
-  const hour = 6 + (tod / WORLD.dayLengthTicks) * 24;
-  const hh = Math.floor(hour) % 24;
-  const mm = Math.floor((hour - Math.floor(hour)) * 60);
-  const hstr = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
-  ctx.fillStyle = 'rgba(255,255,255,0.92)';
-  ctx.font = '16px system-ui';
+  // Selected-item readout
+  const sel = inventory.selectedStack();
+  const selName = sel.count > 0 ? itemName(sel.id) : 'empty';
   ctx.textAlign = 'left';
-  ctx.fillText(`seed=${seed}`, 12, 28);
-  ctx.fillText(`pos=${camera.position.x.toFixed(1)},${camera.position.y.toFixed(1)},${camera.position.z.toFixed(1)}`, 12, 52);
-  ctx.fillText(`time=${hstr} · view=${viewDist} chunks`, 12, 76);
-  ctx.textAlign = 'right';
-  ctx.fillText('click to capture mouse · WASD/space/ctrl to move', w - 12, h - 12);
+  ctx.fillStyle = 'rgba(255,255,255,0.95)';
+  ctx.font = '15px system-ui';
+  ctx.fillText(`selected: ${selName}${sel.count > 0 ? ` ×${sel.count}` : ''}`, 14, h - 14);
+
+  // Targeting hints
+  if (target) {
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.fillText(`target ${getBlockById(target.id).name}${Math.abs(breakingFraction) > 0.02 ? ` · breaking ${Math.round(breakingFraction * 100)}%` : ''}`, 14, h - 90);
+  }
+  if (!input.isLocked()) {
+    ctx.fillText('click to capture mouse · LMB mine · RMB place · 1-9/wheel select', w / 2, h - 14);
+    ctx.textAlign = 'center';
+  }
 }
 
 // ---------- resize ----------
@@ -233,36 +397,64 @@ function onResize() {
 window.addEventListener('resize', onResize);
 
 // ---------- main loop ----------
-let frames = 0;
-let last = performance.now();
+let elapsed = 0;
+let lastUpdate = performance.now();
+
 function animate() {
   requestAnimationFrame(animate);
-  const dt = Math.min(0.05, (performance.now() - last) / 1000);
-  last = performance.now();
+  const now = performance.now();
+  const dt = Math.min(0.05, (now - lastUpdate) / 1000);
+  lastUpdate = now;
 
-  // Simple review camera movement (no collision; A3).
-  const speed = 12;
-  const forward = new THREE.Vector3(-Math.sin(camState.yaw), 0, -Math.cos(camState.yaw));
-  const right = new THREE.Vector3(Math.cos(camState.yaw), 0, -Math.sin(camState.yaw)).negate();
-  const mv = new THREE.Vector3();
-  if (camState.moving['KeyW']) mv.add(forward);
-  if (camState.moving['KeyS']) mv.sub(forward);
-  if (camState.moving['KeyD']) mv.add(right);
-  if (camState.moving['KeyA']) mv.sub(right);
-  if (camState.moving['Space']) mv.y += 1;
-  if (camState.moving['ControlLeft'] || camState.moving['ControlRight']) mv.y -= 1;
-  if (mv.lengthSq() > 0) mv.normalize().multiplyScalar(speed * dt);
-  camera.position.add(mv);
+  // Physics (A3) — WorldState collider includes player edits.
+  loop(dt);
+  syncCamera(camera, player);
 
-  camera.rotation.set(camState.pitch, camState.yaw, 0, 'YXZ');
-
-  // Stream chunks around the camera (enqueue) then build a small batch.
-  updateChunks();
+  // Stream + rebuild chunks.
+  updateChunks(player.pos);
   processLoadQueue();
+  processDirtyChunks();
 
-  // Sky tint + fog follow the solar clock. Start near midday so the world
-  // opens bright; the phase advances at one 24000-tick day per 20 sim-minutes.
-  const t = (performance.now() / 1000) * 20; // sim ticks
+  // Target the block under the crosshair.
+  target = aim();
+  if (target) {
+    highlight.visible = true;
+    highlight.position.set(target.x + 0.5, target.y + 0.5, target.z + 0.5);
+  } else {
+    highlight.visible = false;
+    breaking.reset();
+    breakingFraction = 0;
+  }
+
+  // Mining (LMB, hardness-based).
+  if (target && lmb && input.isLocked()) {
+    if (breaking.update(target, getBlockById(target.id), dt)) {
+      breakAt(target);
+    }
+  } else if (!lmb) {
+    breaking.reset();
+  }
+  breakingFraction = breaking.progressOf(target);
+
+  // Placement (RMB).
+  if (target && rmb && !lmb && input.isLocked()) {
+    placeAt(target);
+  }
+
+  // Drops: physics + pickup into inventory.
+  for (const d of drops) {
+    if (d.alive) stepDrop(d, world, dt);
+    if (d.alive && canPickup(d, player.pos)) {
+      const leftover = inventory.add(d.itemId, d.count);
+      if (leftover === 0) d.alive = false;
+      else d.count = leftover;
+      refreshHeldItem();
+    }
+  }
+  renderDrops();
+
+  // Sky tint + fog follow the solar clock (A2).
+  const t = now / 1000 * 20;
   const tod = (t + DAY_OFFSET) % WORLD.dayLengthTicks;
   const dayFrac = Math.sin((tod / WORLD.dayLengthTicks) * Math.PI * 2 - Math.PI / 2);
   const blend = Math.min(1, Math.max(0, (dayFrac + 1) / 2));
@@ -271,13 +463,17 @@ function animate() {
   scene.fog.color.copy(sky);
 
   renderer.render(scene, camera);
-  drawHUD(dt);
+  drawHUD();
 
-  frames++;
-  if (frames % 120 === 0) {
-    hudState.textContent = `${frames} frames · seed=${seed} · ${chunkMeshes.size} chunks in view · ${renderer.info.render.triangles} tris`;
+  elapsed += dt;
+  if (elapsed >= 1) {
+    hudState.textContent =
+      `seed=${seed} · ${chunkMeshes.size} chunks · ${renderer.info.render.triangles} tris · ` +
+      `inv ${inventory.total()} items · ${drops.filter((d) => d.alive).length} drops`;
+    elapsed = 0;
   }
 }
 animate();
 
-hudState.textContent = `seed=${seed} · renderer=${renderer.capabilities.isWebGL2 ? 'webgl2' : 'webgl1'} · generating world…`;
+hudState.textContent =
+  `seed=${seed} · generating world… · click to capture mouse · LMB mine · RMB place · 1-9/wheel select`;

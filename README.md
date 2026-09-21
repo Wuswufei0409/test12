@@ -59,16 +59,19 @@ Playable survival systems (mining/placing, inventory, crafting, mobs, ocean
 content, trident, saving, performance benchmarking) are tracked by later issues.
 See **Known limits** below.
 
-## Known limits
+## Known limits (Phase A / A1–A4)
 
-1. Player locomotion/collision are **not** implemented here (A3's scope); a
-   pointer-lock free-fly camera is provided for reviewing the generated world.
-2. No physics, survival, combat, crafting, or inventory logic yet.
-3. Oceans render as their sea floor; water/sky is a tinted background, not a
-   translucent liquid mesh.
+1. Player control implemented (pointer lock, WASD, jump/sprint/sneak/swim, AABB
+   collision, step-up). Mining/placing/drops/pickup and a 9-slot hotbar with
+   stacking are implemented on the generated, chunks, but no crafting/combat
+   progression yet.
+2. Drops are simple physics entities; no despawn-on-logout save of dropped
+   items, chests, or furnaces yet.
+3. No survival/combat/crafting debth: hearts/hunger ticks, mobs, tools, and
+   enchantments are not modelled.
 4. No persistence; the save format is contracted but not yet used by runtime.
-5. Performance benchmark (standard 19) not yet measured (gameplay systems
-   absent).
+5. Performance benchmark (standard 19) not yet measured in a full survival
+   session.
 
 ## License & assets
 
