@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import { findRecipe, craft, recipeBook, RECIPES } from '../src/core/crafting.js';
 import { dig, toolDurability, digSpeedFor, useTool } from '../src/core/tools.js';
 import { Furnace, SMELTING_RECIPES, FUEL } from '../src/core/smelting.js';
-import { Inventory } from '../src/core/inventory.js';
+import { createInventory } from '../src/core/inventory.js';
 
 // Build a 3x3 grid (row-major) from a 2D pattern of item-id numbers or names.
 const I = {
@@ -170,11 +170,14 @@ describe('furnace smelting + full upgrade chain (crit 08)', () => {
   });
 
   it('ore drops travel through inventory stacking', () => {
-    const inv = new Inventory(9);
+    const inv = createInventory(9); // hotbar-sized canonical inventory
     const left = inv.add(111, 4); // coal
     expect(left).toBe(0);
-    expect(inv.count(111)).toBe(4);
-    expect(inv.remove(111, 2)).toBe(0);
-    expect(inv.count(111)).toBe(2);
+    expect(inv.total()).toBe(4);
+    expect(inv.stacks[0].id).toBe(111);
+    // second add stacks onto the existing partial stack
+    inv.add(111, 3);
+    expect(inv.stacks[0].count).toBe(7);
+    expect(inv.total()).toBe(7);
   });
 });

@@ -1,75 +1,98 @@
-// Minimal item inventory + ItemStack helpers used by B1 (crafting/tools/smelting)
-// and shared with later A4 inventory issue. Slots hold {id, count} or null.
-// Stack limits come from the block/item registry (contract §BlockItemID).
-import { getBlockById } from './blocks.js';
-import { B1_ITEMS } from './items.js';
+// Hotbar + basic inventory with stacking. Pure module, headless-testable.
+//
+// The inventory is a fixed set of slots (9 hotbar slots by default, matching
+// the CONTRACT hotbar). Adding an item first stacks onto existing matching
+// slots up to that item's stack limit, then fills empty slots. Selected slot
+// drives what the player can place.
+import { getBlockById, BLOCKS, ITEMS } from './blocks.js';
 
-function stackCount(id) {
-  if (B1_ITEMS[id]) return B1_ITEMS[id].stack ?? 64;
-  const b = getBlockById(id);
-  if (b === undefined || b === null) return 64;
-  return b.stack ?? 64;
+export const HOTBAR_SIZE = 9;
+
+/** Maximum items per slot for a given id (blocks stack 64; items use .stack). */
+export function stackCapacity(id) {
+  const asItem = Object.values(ITEMS).find((i) => i.id === id);
+  if (asItem) return asItem.stack || 64;
+  return 64; // blocks and unknown stack to 64
 }
 
-export class Inventory {
-  constructor(size = 36) {
-    this.size = size;
-    this.slots = new Array(size).fill(null);
-  }
+/** Human-readable name for an id (search both block and item registries). */
+export function itemName(id) {
+  const b = getBlockById(id);
+  if (b && b.id !== 0) return b.name;
+  const i = Object.values(ITEMS).find((x) => x.id === id);
+  return i ? i.name : '?';
+}
 
-  at(idx) {
-    return this.slots[idx] ?? null;
-  }
+/**
+ * @param {number} [size] number of hotbar slots; default 9.
+ */
+export function createInventory(size = HOTBAR_SIZE) {
+  const stacks = Array.from({ length: size }, () => ({ id: 0, count: 0 }));
+  return {
+    size,
+    stacks,
+    selected: 0,
 
-  set(idx, stack) {
-    this.slots[idx] = stack ? { ...stack } : null;
-  }
+    /** Select a hotbar slot (clamped to range). */
+    select(index) {
+      if (Number.isInteger(index) && index >= 0 && index < size) this.selected = index;
+    },
 
-  // Merge a stack into the inventory. Returns leftover count not placed.
-  add(id, count) {
-    let left = count;
-    const cap = stackCount(id);
-    // stack into existing partial stacks first
-    for (let i = 0; i < this.size && left > 0; i += 1) {
-      const s = this.slots[i];
-      if (s && s.id === id && s.count < cap) {
-        const room = cap - s.count;
-        const take = Math.min(room, left);
-        s.count += take;
-        left -= take;
+    selectedStack() {
+      return this.stacks[this.selected];
+    },
+
+    /** Add `count` of `id`, stacking first then filling empties. Returns leftover (0 = all stored). */
+    add(id, count) {
+      if (count <= 0) return 0;
+      const cap = stackCapacity(id);
+      let remaining = count;
+      // stack onto existing partial stacks
+      for (const s of this.stacks) {
+        if (remaining <= 0) break;
+        if (s.id === id && s.count > 0 && s.count < cap) {
+          const take = Math.min(cap - s.count, remaining);
+          s.count += take;
+          remaining -= take;
+        }
       }
-    }
-    // then into empty slots
-    for (let i = 0; i < this.size && left > 0; i += 1) {
-      if (!this.slots[i]) {
-        const take = Math.min(cap, left);
-        this.slots[i] = { id, count: take };
-        left -= take;
+      // fill empty slots
+      for (const s of this.stacks) {
+        if (remaining <= 0) break;
+        if (s.count === 0) {
+          const take = Math.min(cap, remaining);
+          s.id = id;
+          s.count = take;
+          remaining -= take;
+        }
       }
-    }
-    return left;
-  }
+      return remaining;
+    },
 
-  remove(id, count) {
-    let left = count;
-    for (let i = 0; i < this.size && left > 0; i += 1) {
-      const s = this.slots[i];
-      if (s && s.id === id) {
-        const take = Math.min(s.count, left);
-        s.count -= take;
-        left -= take;
-        if (s.count <= 0) this.slots[i] = null;
-      }
-    }
-    return left; // 0 = fully removed
-  }
+    /** True when the selected slot holds at least `count` of `id`. */
+    hasSelected(id, count = 1) {
+      const s = this.stacks[this.selected];
+      return s.id === id && s.count >= count;
+    },
 
-  count(id) {
-    return this.slots.reduce((acc, s) => acc + (s && s.id === id ? s.count : 0), 0);
-  }
+    /** Remove up to `count` from the selected slot. Returns amount removed. */
+    takeSelected(count = 1) {
+      const s = this.stacks[this.selected];
+      if (s.count <= 0) return 0;
+      const take = Math.min(s.count, count);
+      s.count -= take;
+      if (s.count === 0) s.id = 0;
+      return take;
+    },
 
-  // Compact representation over a range (default all).
-  slice(start = 0, len = this.size) {
-    return this.slots.slice(start, start + len).map((s) => (s ? { ...s } : null));
-  }
+    /** Total items in all slots (test helper). */
+    total() {
+      return this.stacks.reduce((n, s) => n + s.count, 0);
+    },
+
+    /** Is the selected slot empty? */
+    selectedEmpty() {
+      return this.stacks[this.selected].count === 0;
+    },
+  };
 }

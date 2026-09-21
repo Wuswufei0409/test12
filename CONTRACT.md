@@ -53,10 +53,20 @@ in `src/core/*`) rather than living only in one agent's private memory.
   (`seededRandom`) in `src/core/rng.js`; `hashSeed` folds a string seed into a
   uint32.
 - The same seed must reproduce identical terrain. Reproducibility is verified
-  by a **terrain fingerprint** (fixed-coordinate height sequence) in
+  by a **terrain fingerprint** (fixed-coordinate height sequence) **and** a
+  **fixed-coordinate biome+height sample** in
   `test/smoke/fixed-seed.test.js`.
 - Default / benchmark seed: `test12-phase-a`.
-- Biome tags (Phase A): `plains, forest, desert, mountains`.
+- **Biome tags (Phase A, A2):** `plains, forest, desert, mountains, cold_ocean,
+  warm_ocean, deep_ocean, shallow_ocean`. Oceans are water-filled to
+  `SEA_LEVEL = 32`. Land/ocean and temperature/humidity derive from layered
+  value noise (`src/core/terrain.js#columnAt`).
+- **Chunk world generation:** `src/core/worldgen.js#generateChunk(seed, cx, cz)`
+  returns an immutable `Uint8Array` of block ids (`chunkSize×chunkHeight×
+  chunkSize`). `blockAt(seed, x, y, z)` samples any world position from cached
+  columns; the same seed yields identical chunk data. A **land-spawn fallback**
+  `findLandSpawn(seed)` snaps the player to the nearest non-ocean column so the
+  first-person view is above ground even when the nominal origin is ocean.
 
 ## 6. Save format (Phase A baseline)
 
@@ -109,6 +119,37 @@ in `src/core/*`) rather than living only in one agent's private memory.
   coal_ore->coal, sand->glass) with `FUEL` tick values; `Furnace` is a pure tick
   state machine (input/fuel/output/progress). Full chain: wood pickaxe -> mine
   coal & iron -> smelt -> craft iron pickaxe, validated by test.
-- Inventory: `src/core/inventory.js` `Inventory` (slots, stacking, add/remove)
-  used by tests and later A4 issue.
+- Inventory uses the canonical A4 hotbar module `createInventory`
+  (`src/core/inventory.js`), shared by B1 tests and A4 mechanics.
 
+## 9. Mining, placement, drops & inventory (added A4)
+
+- **World edits** are an overlay on deterministic terrain: `WorldState`
+  (`src/core/worldstate.js`) answers `get(x,y,z)` from an edit Map first, else
+  the pure A2 generator. With no edits it is byte-identical to worldgen
+  (determinism preserved). It also implements the A3 collider contract
+  (`isSolid`/`isLiquid`), so the same object drives meshing and player physics.
+- **Targeting**: `raycastBlock` (DDA voxel traversal, `src/core/targeting.js`) or
+  the crosshair; returns the hit block `{x,y,z}` and place cell `{nx,ny,nz}` on
+  the near face within `maxDist = 6`.
+- **Breaking**: block hardness drives break time — `breakTime = hardness*1.5 +
+  0.1`s by hand (`src/core/breaking.js`). `hardness < 0` / `unbreakable` /
+  non-solid / liquid never break. Progress accumulates while the crosshair holds
+  the block and resets on retarget.
+- **Drops**: `dropForBlock` maps a mined block to an item id. Most breakable
+  solid blocks drop themselves (so mining -> inventory -> placing is a real
+  loop); `grass->dirt`, `coal_ore->coal`, `iron_ore->iron_ingot`, an
+  `leaves`/`diamond_ore` drop nothing. Drops are physics entities
+  (`src/core/drops.js`) with gravity, ground friction/rest, and shelf life;
+  picked up when the player AABB overlaps them.
+- **Hotbar / inventory**: 9 hotbar slots (`HOTBAR_SIZE`, `src/core/inventory.js`).
+  Items stack to `stack` limit (blocks and items default 64; tools/weapons 1).
+  Adding first stacks partial slots then fills empties; leftover is returned.
+  Selected slot drives placement; `1-9` keys / mouse wheel select.
+- **Placement**: right-click places the selected hotbar block at the near-face
+  cell when (a) it is air, (b) the selected slot holds a solid, non-liquid
+  placeable block, (c) the cell does not overlap the player AABB. One item is
+  consumed per placement.
+- **Integration**: `src/main.js` wires A2 chunk streaming + A3 player loop + A4
+  mechanics; mined/placed chunks (3x3 neighbourhood) rebuild their mesh from
+  `WorldState` (`src/render/worldmesh.js`).
