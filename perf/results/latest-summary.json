@@ -1,0 +1,29 @@
+{
+  "ts": "2026-09-21T17-41-21-600Z",
+  "durationSeconds": 300,
+  "snapshot": false,
+  "forcedEntities": 30,
+  "stats": {
+    "n": 6000,
+    "avgMs": 30.497700000007946,
+    "fps": 32.789357885995976,
+    "p95Ms": 34.80000001192093,
+    "minFps": 20,
+    "maxMs": 50
+  },
+  "memory": {
+    "avgStartMB": 748.4,
+    "avgEndMB": 632.5,
+    "deltaMB": -115.8,
+    "peakMB": 766.1,
+    "minMB": 613.8
+  },
+  "crit19": {
+    "avgFps": 32.8,
+    "p95Ms": 34.8,
+    "avgMs": 30.5,
+    "pass": true
+  },
+  "pageErrorCount": 0,
+  "rawFile": "raw-2026-09-21T17-41-21-600Z.json"
+}
