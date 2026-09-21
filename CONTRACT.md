@@ -87,6 +87,16 @@ in `src/core/*`) rather than living only in one agent's private memory.
 - Corrupt/unreadable saves must surface a clear error and fall back safely
   (never silently overwrite a valid save).
 
+**B7 (MUL-103) extension — format 2** (additive, `src/core/save.js`): the save
+now also records `player.pos/yaw/pitch/vel`, `living` (health/hunger/
+saturation/air/deaths), `spawnPoint`, `inventory.stacks+selected`, `equipped`
+(armor), `worldEdits` (modified-block overlay), `containers` (chest/furnace),
+`drops`, and `mobs` (entity state). `loadStoredSave` returns
+`{ok:true}` / `{ok:false,kind:'missing'|'corrupt'|'invalid'}` so the client can
+surface a clear error and start a fresh world without silently overwriting a
+valid save. The client saves on a ~5s autosave, `beforeunload`, and
+`visibilitychange` to resume after tab close.
+
 ## 7. Player physics (added A3)
 
 - Player is an axis-aligned box: width `0.6`, standing height `1.8`, eye height `1.62`; sneak height `1.5`. Half-width `0.3`.
