@@ -21,7 +21,7 @@ import { isHoeItem } from './core/items.js';
 import {
   cropForSeed, cropOfBlock, stageBlockId, harvestDrops, tickCrops, isFarmland, maxStage,
 } from './core/farming.js';
-import { buildChunkMesh } from './render/worldmesh.js';
+import { buildChunkMesh, buildWaterMesh, waterMaterial } from './render/worldmesh.js';
 import { getAtlasTexture, tileUV, TILES } from './render/atlas.js';
 import { recipeBook } from './core/crafting.js';
 import { daylight, isNight, timeLabel, phase, nextDawn } from './core/daycycle.js';
@@ -59,7 +59,44 @@ const seed = WORLD.seed;
 
 // ---------- scene / camera / renderer (A2) ----------
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x87b5d9);
+
+// R-02: vertical sky gradient instead of a flat color fill, so the horizon and
+// zenith read as a clean sky band (no single-colour void dominating the frame).
+const SKY_GRAD = { canvas: null, ctx: null, tex: null, last: '' };
+function makeSkyGradient() {
+  if (SKY_GRAD.tex) return;
+  const canvas = document.createElement('canvas');
+  canvas.width = 2;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearFilter;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  SKY_GRAD.canvas = canvas;
+  SKY_GRAD.ctx = ctx;
+  SKY_GRAD.tex = tex;
+  return tex;
+}
+function setSkyGradient(horizon) {
+  const tex = makeSkyGradient();
+  if (!tex) return;
+  const hexH = '#' + new THREE.Color(horizon).getHexString();
+  // Zenith is a richer, deeper shade of the same hue; horizon is the base tone.
+  const zenith = new THREE.Color(horizon).multiplyScalar(0.42);
+  const hexZ = '#' + zenith.getHexString();
+  const key = hexZ + '|' + hexH;
+  if (SKY_GRAD.last === key) return; // avoid pointless canvas redraws each frame
+  SKY_GRAD.last = key;
+  const ctx = SKY_GRAD.ctx;
+  const g = ctx.createLinearGradient(0, 0, 0, 256);
+  g.addColorStop(0, hexZ);
+  g.addColorStop(1, hexH);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 2, 256);
+  tex.needsUpdate = true;
+}
+scene.background = makeSkyGradient();
 // Perf (crit 19): use linear cheap fog (three.Fog) instead of the expensive
 // per-fragment exponential fog (FogExp2). Visually near-identical for a voxel
 // horizon, but drastically cheaper in software rasterizers and on low-end
@@ -321,7 +358,8 @@ function killMob(m) {
 }
 
 // ---------- chunk streaming (A2) but meshed from the mutable world ----------
-const chunkMeshes = new Map(); // "cx,cz" -> THREE.Mesh
+const chunkMeshes = new Map(); // "cx,cz" -> THREE.Mesh (opaque solid)
+const waterMeshes = new Map(); // "cx,cz" -> THREE.Mesh (translucent water surface)
 const viewDist = 6;
 const loadQueue = [];
 const dirtyChunks = new Set(); // rebuild these each frame (post-edit)
@@ -332,9 +370,21 @@ function loadChunk(cx, cz) {
   applyOceanStructures(cx, cz); // deterministic B5 ocean content (shipwreck/ruin/treasure)
   const geo = buildChunkMesh(world, cx, cz);
   const mesh = new THREE.Mesh(geo, solidMaterial());
-  mesh.position.set(cx * CHUNK.size, 0, cz * CHUNK.size);
+  // buildChunkMesh emits vertices in WORLD coordinates, so the mesh itself
+  // must NOT carry any per-chunk offset (R-02: fixes displaced/scattered voxels
+  // that left giant voids in the first-person render).
+  mesh.position.set(0, 0, 0);
   scene.add(mesh);
   chunkMeshes.set(chunkKey(cx, cz), mesh);
+
+  // R-02: visible ocean surface so water is not an empty void.
+  const waterGeo = buildWaterMesh(world, cx, cz);
+  if (waterGeo) {
+    const water = new THREE.Mesh(waterGeo, waterMaterial());
+    water.position.set(0, 0, 0);
+    scene.add(water);
+    waterMeshes.set(chunkKey(cx, cz), water);
+  }
 }
 
 function unloadChunk(cx, cz) {
@@ -344,6 +394,12 @@ function unloadChunk(cx, cz) {
     scene.remove(mesh);
     mesh.geometry.dispose();
     chunkMeshes.delete(key);
+  }
+  const water = waterMeshes.get(key);
+  if (water) {
+    scene.remove(water);
+    water.geometry.dispose();
+    waterMeshes.delete(key);
   }
 }
 
@@ -398,12 +454,27 @@ function markEdited(x, y, z) {
 
 function processDirtyChunks() {
   for (const key of dirtyChunks) {
-    const mesh = chunkMeshes.get(key);
-    if (!mesh) continue;
     const [cx, cz] = key.split(',').map(Number);
-    const geo = buildChunkMesh(world, cx, cz);
-    mesh.geometry.dispose();
-    mesh.geometry = geo;
+    const mesh = chunkMeshes.get(key);
+    if (mesh) {
+      const geo = buildChunkMesh(world, cx, cz);
+      mesh.geometry.dispose();
+      mesh.geometry = geo;
+    }
+    // Rebuild the water surface too (mining/placing edits can change it).
+    const oldWater = waterMeshes.get(key);
+    if (oldWater) {
+      scene.remove(oldWater);
+      oldWater.geometry.dispose();
+      waterMeshes.delete(key);
+    }
+    const waterGeo = buildWaterMesh(world, cx, cz);
+    if (waterGeo) {
+      const water = new THREE.Mesh(waterGeo, waterMaterial());
+      water.position.set(0, 0, 0);
+      scene.add(water);
+      waterMeshes.set(key, water);
+    }
   }
   dirtyChunks.clear();
 }
@@ -1271,7 +1342,9 @@ function animate() {
   if (day < 0.15) sky = skyNight.clone().lerp(skyDay, day / 0.15);
   else if (day < 0.55) sky = skyDawn.clone().lerp(skyDay, (day - 0.15) / 0.4);
   else sky = skyDay.clone().lerp(skyNight, (day - 0.55) / 0.45);
-  scene.background.copy(sky);
+  // R-02: sky gradient driven by the day/night sky colour; a flat backdrop
+  // would read as one dominating colour band around the horizon.
+  setSkyGradient(sky);
   scene.fog.color.copy(sky);
 
   // B4: advance all crops by this frame's sim-time under current daylight.
@@ -1280,6 +1353,7 @@ function animate() {
   const vis = underwaterVisibility(320, underWater);
   scene.fog = new THREE.FogExp2(new THREE.Color(vis.tint[0], vis.tint[1], vis.tint[2]), vis.factor > 0.4 ? 0.008 : 0.05);
   if (underWater) scene.background = new THREE.Color(vis.tint[0], vis.tint[1], vis.tint[2]);
+  else scene.background = SKY_GRAD.tex;
 
   // B7: periodic autosave (every ~5s) — tab-close persistence.
   autosaveAccum += dt;

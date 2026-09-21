@@ -14,12 +14,12 @@ const CS = CHUNK.size;
 const CH = CHUNK.height;
 
 const FACES = [
-  { dir: [1, 0, 0], corners: [[1, 0, 1], [1, 0, 0], [1, 1, 0], [1, 1, 1]] }, // +x
-  { dir: [-1, 0, 0], corners: [[0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0]] }, // -x
-  { dir: [0, 1, 0], corners: [[0, 1, 0], [1, 1, 0], [1, 1, 1], [0, 1, 1]] }, // +y top
-  { dir: [0, -1, 0], corners: [[0, 0, 0], [0, 0, 1], [1, 0, 1], [1, 0, 0]] }, // -y bottom
-  { dir: [0, 0, 1], corners: [[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]] }, // +z
-  { dir: [0, 0, -1], corners: [[1, 0, 0], [0, 0, 0], [0, 1, 0], [1, 1, 0]] }, // -z
+  { dir: [1, 0, 0], uAxis: 2, vAxis: 1, corners: [[1, 0, 1], [1, 0, 0], [1, 1, 0], [1, 1, 1]] }, // +x
+  { dir: [-1, 0, 0], uAxis: 2, vAxis: 1, corners: [[0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0]] }, // -x
+  { dir: [0, 1, 0], uAxis: 0, vAxis: 2, corners: [[0, 1, 0], [1, 1, 0], [1, 1, 1], [0, 1, 1]] }, // +y top
+  { dir: [0, -1, 0], uAxis: 0, vAxis: 2, corners: [[0, 0, 0], [0, 0, 1], [1, 0, 1], [1, 0, 0]] }, // -y bottom
+  { dir: [0, 0, 1], uAxis: 0, vAxis: 1, corners: [[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]] }, // +z
+  { dir: [0, 0, -1], uAxis: 0, vAxis: 1, corners: [[1, 0, 0], [0, 0, 0], [0, 1, 0], [1, 1, 0]] }, // -z
 ];
 
 // Index into the chunk flat array for a block-local (x,y,z).
@@ -68,7 +68,7 @@ export function buildChunkMesh(seed, chunkX, chunkZ) {
           for (const c of face.corners) {
             positions.push(wx + c[0], wy + c[1], wz + c[2]);
             normals.push(face.dir[0], face.dir[1], face.dir[2]);
-            uvs.push(c[0] === 1 ? u1 : u0, c[2] === 1 ? v0 : v1);
+            uvs.push(c[face.uAxis] === 1 ? u1 : u0, c[face.vAxis] === 1 ? v0 : v1);
           }
           indices.push(vi, vi + 1, vi + 2, vi, vi + 2, vi + 3);
           vi += 4;
