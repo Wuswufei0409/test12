@@ -6,6 +6,22 @@ import { BLOCKS, getBlockById } from './core/blocks.js';
 import { WorldGrid } from './core/worldgrid.js';
 import { createPlayer } from './core/physics.js';
 import { buildArena, createInput, createPlayerLoop, syncCamera } from './player.js';
+import { recipeBook } from './core/crafting.js';
+import { smeltingRecipes } from './core/smelting.js';
+import { RECIPES } from './core/crafting.js';
+
+// Recipe book UI (toggle with B)
+const recipePanel = document.getElementById('recipe-book');
+const recipeList = document.getElementById('recipe-list');
+if (recipeList) {
+  recipeList.innerHTML = recipeBook().map((r) => {
+    const outId = r.output[0];
+    const outName = getBlockById(outId)?.name ?? String(outId);
+    const spec = r.pattern ? r.pattern.map((row) => row.join(' ')).join(' / ') : `(shapeless: ${(r.ingredients || []).join('+')})`;
+    return `<li><b>${r.name}</b> → ${outName} ×${r.output[1]} · ${spec}</li>`;
+  }).join('');
+}
+
 
 const app = document.getElementById('app');
 const hudState = document.getElementById('hud-state');
@@ -72,7 +88,10 @@ function animate() {
 }
 animate();
 
+// toggle recipe book with B
+window.addEventListener('keydown', (e) => { if (e.code === 'KeyB') recipePanel.hidden = !recipePanel.hidden; });
+
 hudState.textContent =
-  `seed=${WORLD.seed} · click to lock mouse · WASD move · Space jump · Shift sprint · Ctrl sneak` +
+  `seed=${WORLD.seed} · click to lock mouse · WASD move · Space jump · Shift sprint · Ctrl sneak · B recipes` +
   ` · pos(${player.pos.x.toFixed(1)}, ${player.pos.y.toFixed(1)}, ${player.pos.z.toFixed(1)})` +
   ` · ${player.inWater ? 'swimming' : player.onGround ? 'grounded' : 'airborne'}`;
