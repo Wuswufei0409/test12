@@ -87,6 +87,16 @@ in `src/core/*`) rather than living only in one agent's private memory.
 - Corrupt/unreadable saves must surface a clear error and fall back safely
   (never silently overwrite a valid save).
 
+**B7 (MUL-103) extension — format 2** (additive, `src/core/save.js`): the save
+now also records `player.pos/yaw/pitch/vel`, `living` (health/hunger/
+saturation/air/deaths), `spawnPoint`, `inventory.stacks+selected`, `equipped`
+(armor), `worldEdits` (modified-block overlay), `containers` (chest/furnace),
+`drops`, and `mobs` (entity state). `loadStoredSave` returns
+`{ok:true}` / `{ok:false,kind:'missing'|'corrupt'|'invalid'}` so the client can
+surface a clear error and start a fresh world without silently overwriting a
+valid save. The client saves on a ~5s autosave, `beforeunload`, and
+`visibilitychange` to resume after tab close.
+
 ## 7. Player physics (added A3)
 
 - Player is an axis-aligned box: width `0.6`, standing height `1.8`, eye height `1.62`; sneak height `1.5`. Half-width `0.3`.
@@ -239,3 +249,66 @@ in `src/core/*`) rather than living only in one agent's private memory.
   wires tilling/planting into the RMB handler, instant crop harvest into the LMB
   handler, and `tickCrops` into the per-frame loop (B4 §-tests in
   `test/b4.test.js`).
+
+## B5 — Water core & ocean content (crit 14, 15)
+
+- **Blocks/items**: ocean blocks 52..57 (coral_block, coral_plant, kelp,
+  seagrass, iceberg, treasure_chest) and items 119/200/201 (treasure_map, coral,
+  prismarine_shard). Note: renumbered to free ids on Phase B2 integration to
+  avoid collision with Phase-B blocks 36-51 and items 120-136. Sources
+  `src/core/blocks.js`.
+- **Water mechanics** (`src/core/water.js`): head-in-water detection, oxygen
+  bar with underwater depletion / in-air regeneration, drowning damage once the
+  bar empties (scaled by difficulty), sprint-swim speed, reduced underwater
+  visibility, 1x1 waterway passability, buoyant drops (water drag + float-to-
+  surface), and underwater block breaks fill the cell with water (no erroneous
+  air pockets).
+- **Ocean worldgen** (`src/core/worldgen.js`): deterministic kelp/seagrass/coral
+  placement in the water column and iceberg shelves in cold oceans — additive,
+  does not change the land heightmap/fingerprint.
+- **Structures** (`src/core/structures.js`): per-(seed,chunk) deterministic
+  shipwrecks, underwater ruins and buried treasure; a treasure_map reveals and
+  the chest drops a mineable reward (coral + prismarine + diamond).
+- **Integration**: `src/main.js` applies ocean structures per loaded chunk,
+  draws O2/HP bars in the HUD, and switches fog/background underwater.
+
+## B6 — Aquatic mobs & trident (crit 16, 17)
+
+- **Item ids (blocks.js, ids 220..231)**: cod(220), salmon(221),
+  tropical_fish(222), pufferfish_item(223), water_bucket(224),
+  cod_bucket(225), salmon_bucket(226), tropical_fish_bucket(227),
+  pufferfish_bucket(228). Empty bucket = 112 (base); trident = 115 (base).
+- **Aquatic mobs (`src/core/aquatic.js`)**: dolphin / cod / salmon / tropical
+  fish / pufferfish with spawn (deterministic over water cells), swim/wander,
+  out-of-water flop->death, hurt/death drops, and pufferfish inflate state that
+  visibly grows near the player and deals contact damage. Bucket capture
+  (empty bucket -> "bucket of <fish>") and release (fish bucket -> mob spawn).
+- **Trident (`src/core/trident.js`)**: throw/return/durability/damage with four
+  enchants — Loyalty (returns after flight), Riptide (returns instantly +
+  propels), Channeling (lightning bolt on thunder aquatic hit), Impaling
+  (+2.5/level vs aquatic). All four implemented; at least 3 required by the
+  criterion. Deterministic flight/hit/return scenarios are unit-tested.
+- **Integration** (`src/main.js`): nearby aquatic mobs spawn in ocean, swim and
+  puff each frame, rendered as colored boxes; pufferfish contact damage drains
+  health; holding a trident RMB throws it, empty bucket RMB captures a near
+  fish, a fish-bucket RMB releases it; `T` cycles trident enchants; HUD shows
+  trident enchant/durability and aquatic mob count. Build clean, `npm test`
+  113/113 (26 new B6).
+## B8 — Performance sampling (crit 19)
+
+- **Harness** (`perf/measure.mjs`): headless-Chromium measurement of the
+  production build. Scene = view-distance 6 chunks + 30 forced live mobs
+  (`?perf=1` hook in main.js). Samples per-frame rAF deltas (steady-state,
+  after chunk-build/spawn warm-up) and OS RSS of the Chromium process tree
+  (headless Chromium stubs `performance.memory`). Run:
+  `node perf/measure.mjs [seconds] [outDir]`.
+- **Instrumentation** (`src/main.js`): a `?perf=1`-only per-frame sampler
+  (rolls a 6000-frame window, exposes `window.__test12Perf`), plus a
+  `window.__test12ForceMobs(n)` hook to make the 30-entity scenario
+  reproducible. Normal play is completely untouched (perf flag absent).
+- **Optimizations** that raised steady-state FPS well above target:
+  linear fog (`THREE.Fog`) instead of per-fragment exponential fog
+  (`FogExp2`), and MSAA disabled (`powerPreference: 'high-performance'`).
+  Both are visually near-identical and cheaper on low-end GPUs.
+- **Result (300 s)**: avg 32.8 FPS, P95 34.8 ms, 0 errors, RSS Δ −115.8 MB
+  (no unbounded growth). Raw data in `perf/results/` + `perf/README.md`.

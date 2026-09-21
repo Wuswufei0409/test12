@@ -24,6 +24,12 @@ const GRAVEL = bid('gravel');
 const BEDROCK = bid('bedrock');
 const WATER = bid('water');
 const SNOW = bid('snow');
+const ICE = bid('ice');
+const KELP = bid('kelp_block');
+const SEAGRASS = bid('seagrass');
+const CORAL_BLOCK = bid('coral_block');
+const CORAL_PLANT = bid('coral_plant');
+const ICE_BERG = bid('ice_berg');
 
 // Build one column (all CH blocks) for a world position. Deterministic.
 function buildColumn(seed, wx, wz) {
@@ -54,6 +60,38 @@ function buildColumn(seed, wx, wz) {
       col[y] = A;
     }
   }
+
+  // --- B5 ocean content decoration (deterministic per column) ---
+  if (isOcean) {
+    const depth = SEA_LEVEL - height; // water depth above the floor
+    const floor = height + 1;         // first water cell above the sea floor
+    // seagrass on the sea floor (shallow-ish)
+    if (depth >= 1 && depth <= 14 && rng() < 0.55) {
+      col[Math.min(floor, CH - 1)] = SEAGRASS;
+    }
+    // coral cluster in warm ocean, near the floor
+    if (biome === 'warm_ocean' && depth >= 2 && depth <= 12 && rng() < 0.6) {
+      const cb = Math.min(floor, CH - 1);
+      col[cb] = rng() < 0.5 ? CORAL_PLANT : CORAL_BLOCK;
+      if (cb + 1 <= SEA_LEVEL) col[cb + 1] = CORAL_PLANT;
+    }
+    // kelp column growing up within the water
+    if (depth >= 2 && rng() < 0.35) {
+      const kelpLen = 1 + Math.floor(rng() * Math.min(4, depth));
+      for (let k = 0; k < kelpLen; k += 1) {
+        const ky = floor + k;
+        if (ky > SEA_LEVEL) break;
+        if (col[ky] === WATER || col[ky] === A) col[ky] = KELP;
+      }
+    }
+    // iceberg shelf in cold ocean: frozen surface blocks poking above water
+    if (biome === 'cold_ocean' && depth <= 4 && rng() < 0.25) {
+      for (let k = 0; k <= 2; k += 1) {
+        const y = Math.min(SEA_LEVEL + k, CH - 1);
+        col[y] = k === 0 ? ICE_BERG : (rng() < 0.7 ? ICE_BERG : SNOW);
+      }
+    }
+  }
   return col;
 }
 
@@ -81,7 +119,15 @@ export function blockAt(seed, wx, wy, wz) {
 // not a plant/cross block, same texture on all sides).
 export function isOpaque(seed, wx, wy, wz) {
   const b = blockAt(seed, wx, wy, wz);
-  return b !== 0 && b !== WATER;
+  // Air, water, and non-solid foliage (kelp/seagrass/coral plant) do not
+  // hide adjacent faces — they render as translucent/cross geometry.
+  const def = blockDefById(b);
+  if (!def) return false;
+  return def.solid === true && b !== WATER;
+}
+
+function blockDefById(id) {
+  return Object.values(BLOCKS).find((x) => x.id === id);
 }
 
 // Generate a full chunk (CS*CH*CS) as a flat Uint8Array of block ids, indexed
