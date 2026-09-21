@@ -40,6 +40,9 @@ import {
 import { createTrident, throwTrident, stepTrident, tickCooldown, consumeDurability, describeEnchants, TRIDENT_ID, TRIDENT } from './core/trident.js';
 import { loadStoredSave, saveToStorage, restoreSnapshot, applyContainers } from './core/save.js';
 import { createMemoryStore } from './core/save.js';
+// R-08 (crit 08): integrated in-game furnace interaction (headless-tested glue).
+import { createFurnaceContainer, tickFurnace, depositStack, takeFromSlot } from './core/furnaceops.js';
+import { SMELTING_RECIPES } from './core/smelting.js';
 
 // Recipe book UI (toggle with B)
 const recipePanel = document.getElementById('recipe-book');
@@ -950,6 +953,112 @@ function buildSnapshot() {
 // Active chest/furnace container state keyed by "x,y,z" (block edits persist the
 // blocks themselves; this holds their contents). Client may populate as needed.
 const worldContainers = {};
+
+// ---------- R-08 furnace GUI (crit 08): integrated in-game smelting ----------
+const FURNACE_ID = (BLOCKS.furnace && BLOCKS.furnace.id) ?? 16;
+let activeFurnaceKey = null;
+function furnaceSlotColor(id) {
+  const b = getBlockById(id);
+  const it = Object.values(ITEMS).find((x) => x.id === id);
+  return b && b.id !== 0 ? b.color : it ? it.color : 0x999999;
+}
+function openFurnaceGUI(key) {
+  if (!worldContainers[key]) worldContainers[key] = createFurnaceContainer();
+  activeFurnaceKey = key;
+  furnaceGUI.style.display = 'block';
+  renderFurnaceGUI();
+}
+function closeFurnaceGUI() {
+  activeFurnaceKey = null;
+  furnaceGUI.style.display = 'none';
+}
+const furnaceGUI = document.createElement('div');
+furnaceGUI.id = 'furnace-gui';
+furnaceGUI.style.cssText = 'position:fixed;left:50%;top:56px;transform:translateX(-50%);z-index:60;' +
+  'background:rgba(18,18,28,0.92);border:2px solid #555;border-radius:8px;padding:12px 16px;' +
+  'color:#fff;font:14px/1.35 system-ui;display:none;text-align:center;min-width:300px;user-select:none;';
+furnaceGUI.innerHTML = `
+  <div style="font-weight:bold;margin-bottom:6px">Furnace<span id="furnace-pos" style="color:#888;font-weight:normal;font-size:11px;margin-left:8px"></span></div>
+  <div style="display:flex;justify-content:center;gap:16px;margin:6px 0">
+    ${['input', 'fuel', 'output'].map((w) => `<div class="fslot" data-which="${w}" title="${w} (click to take)" style="cursor:pointer"><div style="font-size:11px;color:#aaa">${w}</div><div class="fitem" data-which="${w}" style="min-height:34px;line-height:34px;font-size:12px">—</div></div>`).join('')}
+  </div>
+  <div style="margin:6px 0">
+    <div id="furnace-status" style="font-size:12px;color:#aaa">idle</div>
+    <div style="height:12px;border:1px solid #444;border-radius:4px;background:#151520;margin-top:4px;overflow:hidden">
+      <div id="furnace-progress" style="height:100%;width:0%;background:#3f9fd8;transition:width .1s linear"></div>
+    </div>
+  </div>
+  <div id="furnace-hotbar" style="display:flex;justify-content:center;gap:4px;margin-top:8px"></div>
+  <div style="display:flex;justify-content:center;gap:10px;margin-top:10px">
+    <button id="furnace-close" style="cursor:pointer;padding:4px 14px;border:1px solid #666;border-radius:4px;background:#2a2a3a;color:#fff">Close</button>
+  </div>`;
+document.body.appendChild(furnaceGUI);
+
+document.getElementById('furnace-close').addEventListener('click', closeFurnaceGUI);
+furnaceGUI.querySelectorAll('.fslot').forEach((slot) => {
+  slot.addEventListener('click', () => {
+    if (!activeFurnaceKey) return;
+    const c = worldContainers[activeFurnaceKey];
+    const taken = takeFromSlot(c, slot.dataset.which);
+    if (taken) {
+      const leftover = inventory.add(taken.id, taken.count);
+      if (leftover > 0) c[slot.dataset.which] = { id: taken.id, count: leftover };
+    }
+    renderFurnaceGUI();
+    refreshHeldItem();
+  });
+});
+furnaceGUI.querySelector('#furnace-hotbar').addEventListener('click', (e) => {
+  const btn = e.target.closest('.fhslot');
+  if (!btn || !activeFurnaceKey) return;
+  const i = Number(btn.dataset.i);
+  const st = inventory.stacks[i];
+  if (!st || st.count <= 0) return;
+  const moved = { id: st.id, count: st.count };
+  const c = worldContainers[activeFurnaceKey];
+  const leftover = depositStack(c, moved);
+  if (leftover) { st.id = leftover.id; st.count = leftover.count; }
+  else { st.id = 0; st.count = 0; }
+  renderFurnaceGUI();
+  refreshHeldItem();
+});
+function renderFurnaceGUI() {
+  if (!activeFurnaceKey) return;
+  const c = worldContainers[activeFurnaceKey];
+  if (!c) return;
+  const pos = document.getElementById('furnace-pos');
+  if (pos) pos.textContent = `@ ${activeFurnaceKey}`;
+  for (const which of ['input', 'fuel', 'output']) {
+    const el = furnaceGUI.querySelector(`.fitem[data-which="${which}"]`);
+    if (!el) continue;
+    const s = c[which];
+    if (s && s.count > 0) {
+      el.textContent = `${itemName(s.id)}×${s.count}`;
+      el.style.color = '#fff';
+      el.style.background = `#${(furnaceSlotColor(s.id) || 0x999999).toString(16).padStart(6, '0')}55`;
+    } else { el.textContent = '—'; el.style.background = 'transparent'; el.style.color = '#777'; }
+  }
+  const r = c.input && SMELTING_RECIPES[c.input.id] ? SMELTING_RECIPES[c.input.id] : null;
+  const frac = r ? Math.min(1, (c.progress || 0) / r.time) : 0;
+  const pbar = document.getElementById('furnace-progress');
+  if (pbar) pbar.style.width = `${Math.round(frac * 100)}%`;
+  const st = document.getElementById('furnace-status');
+  if (st) st.textContent = c.burning ? 'burning' : 'idle';
+  const hb = document.getElementById('furnace-hotbar');
+  if (hb) {
+    hb.innerHTML = '';
+    for (let i = 0; i < inventory.stacks.length; i += 1) {
+      const s = inventory.stacks[i];
+      const b = document.createElement('button');
+      b.className = 'fhslot'; b.dataset.i = String(i);
+      b.style.cssText = 'width:42px;height:42px;border:1px solid #666;border-radius:4px;background:#222;color:#fff;font-size:10px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.15;padding:2px';
+      b.title = `move to furnace (fuel items -> fuel, else -> input)`;
+      b.innerHTML = s.count > 0 ? `${itemName(s.id).slice(0, 10)}<span style="opacity:.8">×${s.count}</span>` : String(i + 1);
+      hb.appendChild(b);
+    }
+  }
+}
+
 function saveGame() {
   return saveToStorage(storage, buildSnapshot());
 }
@@ -1153,7 +1262,9 @@ function animate() {
     if (foodValue(sel.id) > 0 && living.hunger < living.maxHunger) {
       if (eatSelected(living, inventory)) refreshHeldItem();
     } else if (target) {
-      if (sel.id === TRIDENT_ID && sel.count > 0) {
+      if (target.id === FURNACE_ID) {
+        openFurnaceGUI(`${target.x},${target.y},${target.z}`);
+      } else if (sel.id === TRIDENT_ID && sel.count > 0) {
         if (playerTrident.cooldownLeft <= 0) {
           const dir = cameraDirection(player.yaw, player.pitch);
           const eye = { x: player.pos.x, y: player.pos.y + P.eyeHeight, z: player.pos.z };
@@ -1280,6 +1391,17 @@ function animate() {
   const vis = underwaterVisibility(320, underWater);
   scene.fog = new THREE.FogExp2(new THREE.Color(vis.tint[0], vis.tint[1], vis.tint[2]), vis.factor > 0.4 ? 0.008 : 0.05);
   if (underWater) scene.background = new THREE.Color(vis.tint[0], vis.tint[1], vis.tint[2]);
+
+  // R-08: run every furnace on world ticks (the focused one is kept live; any
+  // burning one keeps smelting even with the GUI closed / across reloads).
+  const fTicks = Math.max(1, Math.round(dt * WORLD.tickRateHz));
+  for (const key of Object.keys(worldContainers)) {
+    const c = worldContainers[key];
+    if (c && (c.burning || key === activeFurnaceKey)) {
+      tickFurnace(c, fTicks);
+    }
+  }
+  if (activeFurnaceKey) renderFurnaceGUI();
 
   // B7: periodic autosave (every ~5s) — tab-close persistence.
   autosaveAccum += dt;
