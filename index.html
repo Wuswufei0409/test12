@@ -18,6 +18,49 @@
       #recipe-book ul { margin: 6px 0 0; padding-left: 18px; }
       #recipe-book li { margin: 2px 0; }
       #recipe-book b { color: #ffe066; }
+
+      /* Phase C interactive crafting panel (crit 07) */
+      #crafting-panel {
+        position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+        z-index: 30; width: 460px; max-width: 94vw;
+        background: rgba(20, 24, 34, 0.94); border: 1px solid rgba(255,255,255,0.25);
+        border-radius: 8px; padding: 12px 14px; color: #fff;
+        font-family: system-ui, sans-serif; user-select: none;
+        box-shadow: 0 6px 24px rgba(0,0,0,0.5);
+      }
+      #crafting-panel .panel-title { font-weight: bold; font-size: 15px; color: #ffe066; margin-bottom: 4px; }
+      #crafting-panel .panel-hint { margin-top: 8px; font-size: 11px; color: #aab; }
+      #crafting-panel .craft-body { display: flex; gap: 16px; align-items: flex-start; }
+      #crafting-panel .craft-grid {
+        display: grid; gap: 5px; flex: 0 0 auto;
+      }
+      #crafting-panel .grid-slot {
+        width: 56px; height: 56px; background: rgba(0,0,0,0.45);
+        border: 1px solid rgba(255,255,255,0.35); border-radius: 4px;
+        position: relative; cursor: pointer;
+      }
+      #crafting-panel .grid-slot.hidden { display: none; }
+      #crafting-panel .cell-fill {
+        position: absolute; inset: 4px; border-radius: 3px;
+        display: flex; align-items: center; justify-content: center;
+      }
+      #crafting-panel .cell-name { font-size: 9px; line-height: 1.05; text-align: center; padding: 2px; word-break: break-word; text-shadow: 0 1px 2px #000; }
+      #crafting-panel .cell-count { position: absolute; right: 3px; bottom: 1px; font-size: 11px; text-shadow: 0 1px 2px #000; }
+      #crafting-panel .result-slot {
+        width: 72px; height: 72px; background: rgba(0,0,0,0.5); margin-top: 24px;
+        border: 1px solid #ffe066; border-radius: 4px; position: relative; cursor: pointer;
+        display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+      }
+      #crafting-panel .result-name { font-size: 10px; color: #ffe066; }
+      #crafting-panel .result-empty { font-size: 10px; color: #889; }
+      #crafting-panel .inv-label { margin: 10px 0 4px; font-size: 11px; color: #aab; }
+      #crafting-panel .inv-row { display: flex; gap: 5px; flex-wrap: wrap; }
+      #crafting-panel .inv-slot {
+        width: 50px; height: 50px; background: rgba(0,0,0,0.4);
+        border: 1px solid rgba(255,255,255,0.3); border-radius: 4px; cursor: pointer; position: relative;
+      }
+      #crafting-panel .inv-slot.selected { border-color: #ffe066; box-shadow: 0 0 0 2px rgba(255,224,102,0.4); }
+
     </style>
   </head>
   <body>

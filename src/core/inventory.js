@@ -5,6 +5,7 @@
 // slots up to that item's stack limit, then fills empty slots. Selected slot
 // drives what the player can place.
 import { getBlockById, BLOCKS, ITEMS } from './blocks.js';
+import { B1_ITEMS } from './items.js';
 
 export const HOTBAR_SIZE = 9;
 
@@ -15,12 +16,14 @@ export function stackCapacity(id) {
   return 64; // blocks and unknown stack to 64
 }
 
-/** Human-readable name for an id (search both block and item registries). */
+/** Human-readable name for an id (search block + item + B1 item registries). */
 export function itemName(id) {
   const b = getBlockById(id);
   if (b && b.id !== 0) return b.name;
   const i = Object.values(ITEMS).find((x) => x.id === id);
-  return i ? i.name : '?';
+  if (i) return i.name;
+  const b1 = Object.values(B1_ITEMS).find((x) => x.id === id);
+  return b1 ? b1.name : '?';
 }
 
 /**

@@ -24,6 +24,7 @@ import {
 import { buildChunkMesh } from './render/worldmesh.js';
 import { getAtlasTexture, tileUV, TILES } from './render/atlas.js';
 import { recipeBook } from './core/crafting.js';
+import { createCraftingPanel } from './client/craftingUI.js';
 import { daylight, isNight, timeLabel, phase, nextDawn } from './core/daycycle.js';
 import { createLiving, eatSelected, tickMetabolism, applyDamage, trackFall, foodValue } from './core/living.js';
 import { MOBS, createMob, stepMob, damageMob, mobDrops, groundHeight, MOB_HEIGHT } from './core/mobs.js';
@@ -47,7 +48,7 @@ const recipeList = document.getElementById('recipe-list');
 if (recipeList) {
   recipeList.innerHTML = recipeBook().map((r) => {
     const outId = r.output[0];
-    const outName = getBlockById(outId)?.name ?? String(outId);
+    const outName = itemName(outId);
     const spec = r.pattern ? r.pattern.map((row) => row.join(' ')).join(' / ') : `(shapeless: ${(r.ingredients || []).join('+')})`;
     return `<li><b>${r.name}</b> → ${outName} ×${r.output[1]} · ${spec}</li>`;
   }).join('');
@@ -141,6 +142,42 @@ inventory.add(222, 4); // potato (plantable + edible)
 inventory.add(112, 2); // empty buckets (B6 bucket capture)
 inventory.add(TRIDENT_ID, 1); // trident (B6 crit 17 demo)
 refreshHeldItem();
+
+// ---------- interactive crafting (Phase C rework, crit 07) ----------
+let craftingOpen = false;
+function acquirePointerLock() {
+  if (!document.pointerLockElement) renderer.domElement.requestPointerLock();
+}
+function releasePointerLock() {
+  if (document.pointerLockElement) document.exitPointerLock();
+}
+// A crafting table within reach (looked at or nearby floor blocks) unlocks 3x3.
+function nearCraftingTable() {
+  if (target && target.id === BLOCKS.crafting_table.id) return true;
+  const px = Math.floor(player.pos.x);
+  const py = Math.floor(player.pos.y - 0.6);
+  const pz = Math.floor(player.pos.z);
+  for (let dx = -2; dx <= 2; dx += 1) {
+    for (let dy = -1; dy <= 2; dy += 1) {
+      for (let dz = -2; dz <= 2; dz += 1) {
+        if (world.get(px + dx, py + dy, pz + dz) === BLOCKS.crafting_table.id) return true;
+      }
+    }
+  }
+  return false;
+}
+const craftingPanel = createCraftingPanel(inventory, {
+  getNearCrafting: nearCraftingTable,
+  onToggleLock(open) {
+    craftingOpen = open;
+    window.__craftingOpen = open;
+    if (open) releasePointerLock();
+    else { setTimeout(acquirePointerLock, 0); refreshHeldItem(); }
+  },
+  onCrafted() { refreshHeldItem(); },
+});
+// E toggles inventory/crafting panel (keep B recipe book working).
+window.addEventListener('keydown', (e) => { if (e.code === 'KeyE') craftingPanel.toggle(); });
 
 // ---------- survival state (B2) ----------
 const living = createLiving();
@@ -680,6 +717,7 @@ let tridentEnchantDemo = 'impaling'; // toggles between impaling/channeling/loya
 let lmb = false;
 let useRequest = false;
 document.addEventListener('mousedown', (e) => {
+  if (craftingOpen) return;
   if (e.button === 0) lmb = true;
   if (e.button === 2) useRequest = true;
 });
