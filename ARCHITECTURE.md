@@ -36,6 +36,9 @@ src/core/inventory.js   9-slot hotbar with stacking + selection
 src/core/drops.js       block->item drop table + drop physics + pickup
 src/core/daycycle.js    day/night cycle: daylight, isNight, phase, nextDawn
 src/core/living.js      survival: health/hunger/damage/food/drowning/fall/death
+src/core/mobs.js        land mobs: spawn/wander-chase/attack-flee/hurt/death/drops (B3)
+src/core/explosion.js   creeper explosion: carve world sphere + drop collection (B3)
+src/core/combat.js      combat gear: melee/bow/armor/durability, knockback, cooldown (B3)
 ```
 
 - `main.js` is the only browser-coupled module: sets up the Three.js scene,

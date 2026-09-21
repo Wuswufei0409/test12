@@ -59,6 +59,24 @@ const REGISTRY = {
   wooden_pickaxe: { id: 116, name: 'wooden_pickaxe', item: true, stack: 1 },
   stone_pickaxe: { id: 117, name: 'stone_pickaxe', item: true, stack: 1 },
   iron_pickaxe: { id: 118, name: 'iron_pickaxe', item: true, stack: 1 },
+  // B3 mob drops + combat materials + armor (crit 11/12)
+  raw_porkchop: { id: 120, name: 'raw_porkchop', item: true, stack: 64, food: 3, color: 0xe8a08a },
+  raw_beef: { id: 121, name: 'raw_beef', item: true, stack: 64, food: 3, color: 0xb5483b },
+  raw_mutton: { id: 122, name: 'raw_mutton', item: true, stack: 64, food: 2, color: 0xc0442f },
+  raw_chicken: { id: 123, name: 'raw_chicken', item: true, stack: 64, food: 2, color: 0xe5c9a2 },
+  rotten_flesh: { id: 124, name: 'rotten_flesh', item: true, stack: 64, food: 1, color: 0x8a6d3c },
+  string: { id: 125, name: 'string', item: true, stack: 64, color: 0xd8d8d8 },
+  gunpowder: { id: 126, name: 'gunpowder', item: true, stack: 64, color: 0x4a4a4a },
+  leather: { id: 127, name: 'leather', item: true, stack: 64, color: 0x9a6a3c },
+  wool: { id: 128, name: 'wool', item: true, stack: 64, color: 0xd8d8d8 },
+  leather_helmet: { id: 129, name: 'leather_helmet', item: true, stack: 1, armorFactor: 1, color: 0x9a6a3c },
+  leather_chest: { id: 130, name: 'leather_chest', item: true, stack: 1, armorFactor: 3, color: 0x9a6a3c },
+  leather_leggings: { id: 131, name: 'leather_leggings', item: true, stack: 1, armorFactor: 2, color: 0x9a6a3c },
+  leather_boots: { id: 132, name: 'leather_boots', item: true, stack: 1, armorFactor: 1, color: 0x9a6a3c },
+  iron_helmet: { id: 133, name: 'iron_helmet', item: true, stack: 1, armorFactor: 2, color: 0xd8d8d8 },
+  iron_chest: { id: 134, name: 'iron_chest', item: true, stack: 1, armorFactor: 6, color: 0xd8d8d8 },
+  iron_leggings: { id: 135, name: 'iron_leggings', item: true, stack: 1, armorFactor: 5, color: 0xd8d8d8 },
+  iron_boots: { id: 136, name: 'iron_boots', item: true, stack: 1, armorFactor: 2, color: 0xd8d8d8 },
 };
 
 export const BLOCKS = Object.fromEntries(

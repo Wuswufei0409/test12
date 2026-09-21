@@ -85,6 +85,58 @@ const R_ = {
     ['prismarine_shard', 'prismarine_shard'],
     ['prismarine_shard', 'prismarine_shard'],
   ] },
+  // B3 combat gear (crit 12)
+  bow: { name: 'bow', output: [103, 1], shape: [
+    ['.', 'string', 'stick'],
+    ['stick', '.', 'string'],
+    ['.', 'string', 'stick'],
+  ] },
+  arrow: { name: 'arrow', output: [104, 4], shape: [
+    ['stick'],
+    ['coal'],
+    ['stick'],
+  ] },
+  shield: { name: 'shield', output: [114, 1], shape: [
+    ['planks', 'planks', 'planks'],
+    ['planks', 'planks', 'planks'],
+    ['planks', '.', 'planks'],
+  ] },
+  leather_helmet: { name: 'leather_helmet', output: [129, 1], shape: [
+    ['leather', 'leather', 'leather'],
+    ['leather', '.', 'leather'],
+  ] },
+  leather_chest: { name: 'leather_chest', output: [130, 1], shape: [
+    ['leather', '.', 'leather'],
+    ['leather', 'leather', 'leather'],
+    ['leather', 'leather', 'leather'],
+  ] },
+  leather_leggings: { name: 'leather_leggings', output: [131, 1], shape: [
+    ['leather', 'leather', 'leather'],
+    ['leather', '.', 'leather'],
+    ['leather', '.', 'leather'],
+  ] },
+  leather_boots: { name: 'leather_boots', output: [132, 1], shape: [
+    ['leather', '.', 'leather'],
+    ['leather', '.', 'leather'],
+  ] },
+  iron_helmet: { name: 'iron_helmet', output: [133, 1], shape: [
+    ['iron_ingot', 'iron_ingot', 'iron_ingot'],
+    ['iron_ingot', '.', 'iron_ingot'],
+  ] },
+  iron_chest: { name: 'iron_chest', output: [134, 1], shape: [
+    ['iron_ingot', '.', 'iron_ingot'],
+    ['iron_ingot', 'iron_ingot', 'iron_ingot'],
+    ['iron_ingot', 'iron_ingot', 'iron_ingot'],
+  ] },
+  iron_leggings: { name: 'iron_leggings', output: [135, 1], shape: [
+    ['iron_ingot', 'iron_ingot', 'iron_ingot'],
+    ['iron_ingot', '.', 'iron_ingot'],
+    ['iron_ingot', '.', 'iron_ingot'],
+  ] },
+  iron_boots: { name: 'iron_boots', output: [136, 1], shape: [
+    ['iron_ingot', '.', 'iron_ingot'],
+    ['iron_ingot', '.', 'iron_ingot'],
+  ] },
 };
 
 export const RECIPES = Object.values(R_);

@@ -59,16 +59,19 @@ Playable survival systems (mining/placing, inventory, crafting, mobs, ocean
 content, trident, saving, performance benchmarking) are tracked by later issues.
 See **Known limits** below.
 
-## Known limits (Phase A / A1–A4)
+## Known limits (Phase A / A1–A4; B1–B3 progress)
 
 1. Player control implemented (pointer lock, WASD, jump/sprint/sneak/swim, AABB
    collision, step-up). Mining/placing/drops/pickup and a 9-slot hotbar with
-   stacking are implemented on the generated, chunks, but no crafting/combat
-   progression yet.
+   stacking are implemented on the generated chunks.
 2. Drops are simple physics entities; no despawn-on-logout save of dropped
    items, chests, or furnaces yet.
-3. No survival/combat/crafting debth: hearts/hunger ticks, mobs, tools, and
-   enchantments are not modelled.
+3. Survival/combat depth: hearts/hunger/oxygen (B2), land mobs
+   (pig/cow/sheep/chicken/zombie/spider/creeper with wander/chase/attack/flee,
+   death, drops, creeper explosion), and combat gear (wood/stone/iron melee,
+   bow, leather/iron armor with durability, knockback, cooldown, hit feedback)
+   are now modelled (B2/B3). Ocean mobs, enchantments/trident, and full tool
+   affinity with physical-layer durability consumption remain open.
 4. No persistence; the save format is contracted but not yet used by runtime.
 5. Performance benchmark (standard 19) not yet measured in a full survival
    session.
