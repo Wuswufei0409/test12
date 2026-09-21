@@ -1,49 +1,59 @@
-// Phase A scaffold: renders a simple three.js voxel-ish ground with a cube.
-// This is intentionally minimal; richer world/chunk rendering lands in later issues.
+// test12 — voxel sandbox scaffold (Phase A + A3 player control).
+// Three.js scene + deterministic arena + player physics loop.
 import * as THREE from 'three';
-import { seededRandom } from './core/rng.js';
 import { WORLD } from './core/world.js';
+import { BLOCKS, getBlockById } from './core/blocks.js';
+import { WorldGrid } from './core/worldgrid.js';
+import { createPlayer } from './core/physics.js';
+import { buildArena, createInput, createPlayerLoop, syncCamera } from './player.js';
 
 const app = document.getElementById('app');
 const hudState = document.getElementById('hud-state');
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87b5d9);
-scene.fog = new THREE.Fog(0x87b5d9, 24, 80);
+scene.fog = new THREE.Fog(0x87b5d9, 40, 160);
 
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 200);
-camera.position.set(WORLD.spawn.x, WORLD.spawn.y, WORLD.spawn.z);
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 300);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 app.appendChild(renderer.domElement);
 
-const light = new THREE.AmbientLight(0xffffff, 0.6);
+const light = new THREE.AmbientLight(0xffffff, 0.65);
 scene.add(light);
-const sun = new THREE.DirectionalLight(0xffffff, 0.9);
-sun.position.set(20, 40, 10);
+const sun = new THREE.DirectionalLight(0xffffff, 0.85);
+sun.position.set(30, 60, 20);
 scene.add(sun);
 
-// Simple world: a flat ground of voxels derived from the seeded RNG so the
-// fixed-seed smoke test can assert deterministic terrain.
-const rng = seededRandom(WORLD.seed);
-const groundGeo = new THREE.BoxGeometry(1, 1, 1);
-const grassMat = new THREE.MeshLambertMaterial({ color: 0x6abe30 });
-const dirtMat = new THREE.MeshLambertMaterial({ color: 0x8a5a2b });
-const stoneMat = new THREE.MeshLambertMaterial({ color: 0x888888 });
-
-for (let x = -16; x <= 16; x++) {
-  for (let z = -16; z <= 16; z++) {
-    const h = Math.floor(rng() * 3); // 0..2 height variation
-    for (let y = 0; y <= h; y++) {
-      const mat = y === h ? grassMat : y === 0 ? stoneMat : dirtMat;
-      const box = new THREE.Mesh(groundGeo, mat);
-      box.position.set(x, y - 0.5, z);
-      scene.add(box);
-    }
+// --- world ---
+const world = buildArena();
+const materialCache = new Map();
+function materialFor(id) {
+  const b = getBlockById(id);
+  const color = b.color ?? 0x888888;
+  const key = `${id}:${color}`;
+  if (!materialCache.has(key)) {
+    materialCache.set(key, new THREE.MeshLambertMaterial({ color, transparent: id === 6, opacity: id === 6 ? 0.6 : 1 }));
   }
+  return materialCache.get(key);
 }
+const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+// render solid/liquid blocks of the arena
+for (const [key, id] of world.map) {
+  const [x, y, z] = key.split(',').map(Number);
+  if (id === 0) continue;
+  const mesh = new THREE.Mesh(boxGeo, materialFor(id));
+  mesh.position.set(x + 0.5, y + 0.5, z + 0.5);
+  scene.add(mesh);
+}
+
+// --- player ---
+const player = createPlayer(0, 6, 0, 0);
+const input = createInput(renderer.domElement, camera, player);
+const loop = createPlayerLoop(world, player, input);
+syncCamera(camera, player);
 
 function onResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -55,11 +65,14 @@ window.addEventListener('resize', onResize);
 const clock = new THREE.Clock();
 function animate() {
   requestAnimationFrame(animate);
-  const t = clock.getElapsedTime();
-  camera.position.y = WORLD.spawn.y + Math.sin(t * 0.5) * 0.4;
-  camera.lookAt(0, 1, 0);
+  const dt = Math.min(clock.getDelta(), 0.1);
+  loop(dt);
+  syncCamera(camera, player);
   renderer.render(scene, camera);
 }
 animate();
 
-hudState.textContent = `seed=${WORLD.seed} · renderer=${renderer.capabilities.isWebGL2 ? 'webgl2' : 'webgl1'}`;
+hudState.textContent =
+  `seed=${WORLD.seed} · click to lock mouse · WASD move · Space jump · Shift sprint · Ctrl sneak` +
+  ` · pos(${player.pos.x.toFixed(1)}, ${player.pos.y.toFixed(1)}, ${player.pos.z.toFixed(1)})` +
+  ` · ${player.inWater ? 'swimming' : player.onGround ? 'grounded' : 'airborne'}`;

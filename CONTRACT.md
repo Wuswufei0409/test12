@@ -77,7 +77,17 @@ in `src/core/*`) rather than living only in one agent's private memory.
 - Corrupt/unreadable saves must surface a clear error and fall back safely
   (never silently overwrite a valid save).
 
-## 7. Artifact & versioning
+## 7. Player physics (added A3)
+
+- Player is an axis-aligned box: width `0.6`, standing height `1.8`, eye height `1.62`; sneak height `1.5`. Half-width `0.3`.
+- Collision is AABB-vs-solid-block resolved per axis (X, Z, then Y); players cannot pass through or stably embed in solid blocks.
+- Gravity `0.08` blocks/tick² ; jump `0.42`; velocities are per-tick at 20 Hz (see `src/core/physics.js` `PLAYER`).
+- Movement: WASD relative to yaw; sprint `1.3x`, sneak `0.3x`, swim `0.6x`, low buoyancy (`0.4` of gravity) with climb/dive.
+- Step-up: horizontal moves auto-step obstacles up to `maxStep = 0.5` while grounded (stairs/slabs); taller ledges block.
+- Landing sets `onGround` and zeroes vertical velocity. Implemented in `createPlayer/stepPlayer` (pure, tested).
+- Arena/world adapter for collision: `src/core/worldgrid.js` `WorldGrid` (`isSolid/isLiquid`).
+
+## 8. Artifact & versioning
 
 - Releases are tagged and CI builds are immutable per commit.
 - The deploy is GitHub Pages at `https://Wuswufei0409.github.io/test12/`.
