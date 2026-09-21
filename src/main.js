@@ -14,16 +14,19 @@ import { createPlayer, PLAYER as P } from './core/physics.js';
 import { createInput, createPlayerLoop, syncCamera } from './player.js';
 import { raycastBlock, cameraDirection } from './core/targeting.js';
 import { Breaking } from './core/breaking.js';
-import { createInventory, itemName, stackCapacity } from './core/inventory.js';
+import { createInventory, itemName, stackCapacity, HOTBAR_SIZE, INVENTORY_SIZE } from './core/inventory.js';
+import { spillInventory } from './core/death.js';
+import { createInventoryPanel } from './client/inventoryUI.js';
 import { dropForBlock, createDrop, stepDrop, canPickup } from './core/drops.js';
 import { getBlockById, BLOCKS, ITEMS } from './core/blocks.js';
 import { isHoeItem } from './core/items.js';
 import {
   cropForSeed, cropOfBlock, stageBlockId, harvestDrops, tickCrops, isFarmland, maxStage,
 } from './core/farming.js';
-import { buildChunkMesh } from './render/worldmesh.js';
+import { buildChunkMesh, buildWaterMesh, waterMaterial } from './render/worldmesh.js';
 import { getAtlasTexture, tileUV, TILES } from './render/atlas.js';
 import { recipeBook } from './core/crafting.js';
+import { createCraftingPanel } from './client/craftingUI.js';
 import { daylight, isNight, timeLabel, phase, nextDawn } from './core/daycycle.js';
 import { createLiving, eatSelected, tickMetabolism, applyDamage, trackFall, foodValue } from './core/living.js';
 import { MOBS, createMob, stepMob, damageMob, mobDrops, groundHeight, MOB_HEIGHT } from './core/mobs.js';
@@ -40,6 +43,9 @@ import {
 import { createTrident, throwTrident, stepTrident, tickCooldown, consumeDurability, describeEnchants, TRIDENT_ID, TRIDENT } from './core/trident.js';
 import { loadStoredSave, saveToStorage, restoreSnapshot, applyContainers } from './core/save.js';
 import { createMemoryStore } from './core/save.js';
+// R-08 (crit 08): integrated in-game furnace interaction (headless-tested glue).
+import { createFurnaceContainer, tickFurnace, depositStack, takeFromSlot } from './core/furnaceops.js';
+import { SMELTING_RECIPES } from './core/smelting.js';
 
 // Recipe book UI (toggle with B)
 const recipePanel = document.getElementById('recipe-book');
@@ -47,7 +53,7 @@ const recipeList = document.getElementById('recipe-list');
 if (recipeList) {
   recipeList.innerHTML = recipeBook().map((r) => {
     const outId = r.output[0];
-    const outName = getBlockById(outId)?.name ?? String(outId);
+    const outName = itemName(outId);
     const spec = r.pattern ? r.pattern.map((row) => row.join(' ')).join(' / ') : `(shapeless: ${(r.ingredients || []).join('+')})`;
     return `<li><b>${r.name}</b> → ${outName} ×${r.output[1]} · ${spec}</li>`;
   }).join('');
@@ -59,7 +65,44 @@ const seed = WORLD.seed;
 
 // ---------- scene / camera / renderer (A2) ----------
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x87b5d9);
+
+// R-02: vertical sky gradient instead of a flat color fill, so the horizon and
+// zenith read as a clean sky band (no single-colour void dominating the frame).
+const SKY_GRAD = { canvas: null, ctx: null, tex: null, last: '' };
+function makeSkyGradient() {
+  if (SKY_GRAD.tex) return;
+  const canvas = document.createElement('canvas');
+  canvas.width = 2;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearFilter;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  SKY_GRAD.canvas = canvas;
+  SKY_GRAD.ctx = ctx;
+  SKY_GRAD.tex = tex;
+  return tex;
+}
+function setSkyGradient(horizon) {
+  const tex = makeSkyGradient();
+  if (!tex) return;
+  const hexH = '#' + new THREE.Color(horizon).getHexString();
+  // Zenith is a richer, deeper shade of the same hue; horizon is the base tone.
+  const zenith = new THREE.Color(horizon).multiplyScalar(0.42);
+  const hexZ = '#' + zenith.getHexString();
+  const key = hexZ + '|' + hexH;
+  if (SKY_GRAD.last === key) return; // avoid pointless canvas redraws each frame
+  SKY_GRAD.last = key;
+  const ctx = SKY_GRAD.ctx;
+  const g = ctx.createLinearGradient(0, 0, 0, 256);
+  g.addColorStop(0, hexZ);
+  g.addColorStop(1, hexH);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 2, 256);
+  tex.needsUpdate = true;
+}
+scene.background = makeSkyGradient();
 // Perf (crit 19): use linear cheap fog (three.Fog) instead of the expensive
 // per-fragment exponential fog (FogExp2). Visually near-identical for a voxel
 // horizon, but drastically cheaper in software rasterizers and on low-end
@@ -127,7 +170,7 @@ function refreshHeldItem() {
 }
 
 // ---------- inventory / hotbar (A4) ----------
-const inventory = createInventory(9);
+const inventory = createInventory(INVENTORY_SIZE); // 9 hotbar + 27 storage (crit 06)
 // Small starter kit so a tester can immediately place/survive.
 inventory.add(1, 8); // stone
 inventory.add(7, 8); // planks
@@ -141,6 +184,58 @@ inventory.add(222, 4); // potato (plantable + edible)
 inventory.add(112, 2); // empty buckets (B6 bucket capture)
 inventory.add(TRIDENT_ID, 1); // trident (B6 crit 17 demo)
 refreshHeldItem();
+
+// ---------- interactive crafting + full-inventory UI (Phase C rework, crit 07/06) ----------
+let craftingOpen = false;
+let inventoryOpen = false;
+function acquirePointerLock() {
+  if (!document.pointerLockElement) renderer.domElement.requestPointerLock();
+}
+function releasePointerLock() {
+  if (document.pointerLockElement) document.exitPointerLock();
+}
+// A crafting table within reach (looked at or nearby floor blocks) unlocks 3x3.
+function nearCraftingTable() {
+  if (target && target.id === BLOCKS.crafting_table.id) return true;
+  const px = Math.floor(player.pos.x);
+  const py = Math.floor(player.pos.y - 0.6);
+  const pz = Math.floor(player.pos.z);
+  for (let dx = -2; dx <= 2; dx += 1) {
+    for (let dy = -1; dy <= 2; dy += 1) {
+      for (let dz = -2; dz <= 2; dz += 1) {
+        if (world.get(px + dx, py + dy, pz + dz) === BLOCKS.crafting_table.id) return true;
+      }
+    }
+  }
+  return false;
+}
+const craftingPanel = createCraftingPanel(inventory, {
+  getNearCrafting: nearCraftingTable,
+  onToggleLock(open) {
+    craftingOpen = open;
+    window.__craftingOpen = open;
+    if (open) releasePointerLock();
+    else { setTimeout(acquirePointerLock, 0); refreshHeldItem(); }
+  },
+  onCrafted() { refreshHeldItem(); },
+});
+const inventoryPanel = createInventoryPanel(inventory, {
+  onToggleLock(open) {
+    inventoryOpen = open;
+    window.__inventoryOpen = open;
+    if (open) releasePointerLock();
+    else setTimeout(acquirePointerLock, 0);
+  },
+  onChanged() { refreshHeldItem(); },
+});
+// E toggles inventory (or crafting when near a crafting table). B recipe book stays.
+window.addEventListener('keydown', (e) => {
+  if (e.code !== 'KeyE') return;
+  if (craftingPanel.isOpen()) { craftingPanel.toggle(); return; }
+  if (inventoryPanel.isOpen()) { inventoryPanel.toggle(); return; }
+  (nearCraftingTable() ? craftingPanel : inventoryPanel).toggle();
+});
+
 
 // ---------- survival state (B2) ----------
 const living = createLiving();
@@ -321,7 +416,8 @@ function killMob(m) {
 }
 
 // ---------- chunk streaming (A2) but meshed from the mutable world ----------
-const chunkMeshes = new Map(); // "cx,cz" -> THREE.Mesh
+const chunkMeshes = new Map(); // "cx,cz" -> THREE.Mesh (opaque solid)
+const waterMeshes = new Map(); // "cx,cz" -> THREE.Mesh (translucent water surface)
 const viewDist = 6;
 const loadQueue = [];
 const dirtyChunks = new Set(); // rebuild these each frame (post-edit)
@@ -332,9 +428,21 @@ function loadChunk(cx, cz) {
   applyOceanStructures(cx, cz); // deterministic B5 ocean content (shipwreck/ruin/treasure)
   const geo = buildChunkMesh(world, cx, cz);
   const mesh = new THREE.Mesh(geo, solidMaterial());
-  mesh.position.set(cx * CHUNK.size, 0, cz * CHUNK.size);
+  // buildChunkMesh emits vertices in WORLD coordinates, so the mesh itself
+  // must NOT carry any per-chunk offset (R-02: fixes displaced/scattered voxels
+  // that left giant voids in the first-person render).
+  mesh.position.set(0, 0, 0);
   scene.add(mesh);
   chunkMeshes.set(chunkKey(cx, cz), mesh);
+
+  // R-02: visible ocean surface so water is not an empty void.
+  const waterGeo = buildWaterMesh(world, cx, cz);
+  if (waterGeo) {
+    const water = new THREE.Mesh(waterGeo, waterMaterial());
+    water.position.set(0, 0, 0);
+    scene.add(water);
+    waterMeshes.set(chunkKey(cx, cz), water);
+  }
 }
 
 function unloadChunk(cx, cz) {
@@ -344,6 +452,12 @@ function unloadChunk(cx, cz) {
     scene.remove(mesh);
     mesh.geometry.dispose();
     chunkMeshes.delete(key);
+  }
+  const water = waterMeshes.get(key);
+  if (water) {
+    scene.remove(water);
+    water.geometry.dispose();
+    waterMeshes.delete(key);
   }
 }
 
@@ -398,12 +512,27 @@ function markEdited(x, y, z) {
 
 function processDirtyChunks() {
   for (const key of dirtyChunks) {
-    const mesh = chunkMeshes.get(key);
-    if (!mesh) continue;
     const [cx, cz] = key.split(',').map(Number);
-    const geo = buildChunkMesh(world, cx, cz);
-    mesh.geometry.dispose();
-    mesh.geometry = geo;
+    const mesh = chunkMeshes.get(key);
+    if (mesh) {
+      const geo = buildChunkMesh(world, cx, cz);
+      mesh.geometry.dispose();
+      mesh.geometry = geo;
+    }
+    // Rebuild the water surface too (mining/placing edits can change it).
+    const oldWater = waterMeshes.get(key);
+    if (oldWater) {
+      scene.remove(oldWater);
+      oldWater.geometry.dispose();
+      waterMeshes.delete(key);
+    }
+    const waterGeo = buildWaterMesh(world, cx, cz);
+    if (waterGeo) {
+      const water = new THREE.Mesh(waterGeo, waterMaterial());
+      water.position.set(0, 0, 0);
+      scene.add(water);
+      waterMeshes.set(key, water);
+    }
   }
   dirtyChunks.clear();
 }
@@ -517,6 +646,20 @@ function placeAt(hit) {
 }
 
 // ---------- survival helpers (B2): death / respawn / sleep ----------
+let didDropDeath = false;
+// On death, drop the player's full inventory as world drops at the death
+// location, clear the inventory, and show a visible message (crit 06).
+function dropInventoryOnDeath() {
+  const dropped = spillInventory(inventory);
+  for (const d of dropped) {
+    drops.push(createDrop(player.pos.x, player.pos.y, player.pos.z, d.id, d.count));
+  }
+  refreshHeldItem();
+  sleepingMsg = 'You died — inventory dropped at death point';
+  sleepMsgTimer = 4;
+  didDropDeath = true;
+}
+
 function respawn() {
   Object.assign(living, createLiving());
   deaths += 1;
@@ -524,6 +667,7 @@ function respawn() {
   player.pos.y = spawnPoint.y;
   player.pos.z = spawnPoint.z;
   player.vel.y = 0;
+  didDropDeath = false;
   sleepingMsg = 'You died — respawned at spawn point';
   sleepMsgTimer = 3;
 }
@@ -680,6 +824,7 @@ let tridentEnchantDemo = 'impaling'; // toggles between impaling/channeling/loya
 let lmb = false;
 let useRequest = false;
 document.addEventListener('mousedown', (e) => {
+  if (craftingOpen || inventoryOpen) return;
   if (e.button === 0) lmb = true;
   if (e.button === 2) useRequest = true;
 });
@@ -692,7 +837,7 @@ document.addEventListener('contextmenu', (e) => e.preventDefault());
 window.addEventListener('keydown', (e) => {
   if (e.code.startsWith('Digit')) {
     const n = Number(e.code.slice(5));
-    if (n >= 1 && n <= inventory.size) {
+    if (n >= 1 && n <= HOTBAR_SIZE) {
       inventory.select(n - 1);
       refreshHeldItem();
     }
@@ -715,7 +860,7 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('wheel', (e) => {
   const delta = Math.sign(e.deltaY);
-  inventory.select((inventory.selected + delta + inventory.size) % inventory.size);
+  inventory.select((inventory.selected + delta + HOTBAR_SIZE) % HOTBAR_SIZE);
   refreshHeldItem();
 });
 
@@ -753,7 +898,7 @@ function drawHUD() {
   // Hotbar (9 real inventory slots)
   const slotSize = 42;
   const gap = 4;
-  const n = inventory.size;
+  const n = HOTBAR_SIZE; // the in-world hotbar shows only the 9 hotbar slots
   const barW = n * slotSize + (n - 1) * gap;
   const bx = (w - barW) / 2;
   const by = h - slotSize - 14;
@@ -892,7 +1037,7 @@ function drawHUD() {
     ctx.fillText(`target ${getBlockById(target.id).name}${Math.abs(breakingFraction) > 0.02 ? ` · breaking ${Math.round(breakingFraction * 100)}%` : ''}`, 14, h - 90);
   }
   if (!input.isLocked()) {
-    ctx.fillText('click to capture mouse · LMB mine · RMB eat/place · 1-9/wheel select · F sleep on bed', w / 2, h - 14);
+    ctx.fillText('click to capture mouse · LMB mine · RMB eat/place · 1-9/wheel select · E inventory · F sleep on bed', w / 2, h - 14);
     ctx.textAlign = 'center';
   }
 
@@ -950,6 +1095,112 @@ function buildSnapshot() {
 // Active chest/furnace container state keyed by "x,y,z" (block edits persist the
 // blocks themselves; this holds their contents). Client may populate as needed.
 const worldContainers = {};
+
+// ---------- R-08 furnace GUI (crit 08): integrated in-game smelting ----------
+const FURNACE_ID = (BLOCKS.furnace && BLOCKS.furnace.id) ?? 16;
+let activeFurnaceKey = null;
+function furnaceSlotColor(id) {
+  const b = getBlockById(id);
+  const it = Object.values(ITEMS).find((x) => x.id === id);
+  return b && b.id !== 0 ? b.color : it ? it.color : 0x999999;
+}
+function openFurnaceGUI(key) {
+  if (!worldContainers[key]) worldContainers[key] = createFurnaceContainer();
+  activeFurnaceKey = key;
+  furnaceGUI.style.display = 'block';
+  renderFurnaceGUI();
+}
+function closeFurnaceGUI() {
+  activeFurnaceKey = null;
+  furnaceGUI.style.display = 'none';
+}
+const furnaceGUI = document.createElement('div');
+furnaceGUI.id = 'furnace-gui';
+furnaceGUI.style.cssText = 'position:fixed;left:50%;top:56px;transform:translateX(-50%);z-index:60;' +
+  'background:rgba(18,18,28,0.92);border:2px solid #555;border-radius:8px;padding:12px 16px;' +
+  'color:#fff;font:14px/1.35 system-ui;display:none;text-align:center;min-width:300px;user-select:none;';
+furnaceGUI.innerHTML = `
+  <div style="font-weight:bold;margin-bottom:6px">Furnace<span id="furnace-pos" style="color:#888;font-weight:normal;font-size:11px;margin-left:8px"></span></div>
+  <div style="display:flex;justify-content:center;gap:16px;margin:6px 0">
+    ${['input', 'fuel', 'output'].map((w) => `<div class="fslot" data-which="${w}" title="${w} (click to take)" style="cursor:pointer"><div style="font-size:11px;color:#aaa">${w}</div><div class="fitem" data-which="${w}" style="min-height:34px;line-height:34px;font-size:12px">—</div></div>`).join('')}
+  </div>
+  <div style="margin:6px 0">
+    <div id="furnace-status" style="font-size:12px;color:#aaa">idle</div>
+    <div style="height:12px;border:1px solid #444;border-radius:4px;background:#151520;margin-top:4px;overflow:hidden">
+      <div id="furnace-progress" style="height:100%;width:0%;background:#3f9fd8;transition:width .1s linear"></div>
+    </div>
+  </div>
+  <div id="furnace-hotbar" style="display:flex;justify-content:center;gap:4px;margin-top:8px"></div>
+  <div style="display:flex;justify-content:center;gap:10px;margin-top:10px">
+    <button id="furnace-close" style="cursor:pointer;padding:4px 14px;border:1px solid #666;border-radius:4px;background:#2a2a3a;color:#fff">Close</button>
+  </div>`;
+document.body.appendChild(furnaceGUI);
+
+document.getElementById('furnace-close').addEventListener('click', closeFurnaceGUI);
+furnaceGUI.querySelectorAll('.fslot').forEach((slot) => {
+  slot.addEventListener('click', () => {
+    if (!activeFurnaceKey) return;
+    const c = worldContainers[activeFurnaceKey];
+    const taken = takeFromSlot(c, slot.dataset.which);
+    if (taken) {
+      const leftover = inventory.add(taken.id, taken.count);
+      if (leftover > 0) c[slot.dataset.which] = { id: taken.id, count: leftover };
+    }
+    renderFurnaceGUI();
+    refreshHeldItem();
+  });
+});
+furnaceGUI.querySelector('#furnace-hotbar').addEventListener('click', (e) => {
+  const btn = e.target.closest('.fhslot');
+  if (!btn || !activeFurnaceKey) return;
+  const i = Number(btn.dataset.i);
+  const st = inventory.stacks[i];
+  if (!st || st.count <= 0) return;
+  const moved = { id: st.id, count: st.count };
+  const c = worldContainers[activeFurnaceKey];
+  const leftover = depositStack(c, moved);
+  if (leftover) { st.id = leftover.id; st.count = leftover.count; }
+  else { st.id = 0; st.count = 0; }
+  renderFurnaceGUI();
+  refreshHeldItem();
+});
+function renderFurnaceGUI() {
+  if (!activeFurnaceKey) return;
+  const c = worldContainers[activeFurnaceKey];
+  if (!c) return;
+  const pos = document.getElementById('furnace-pos');
+  if (pos) pos.textContent = `@ ${activeFurnaceKey}`;
+  for (const which of ['input', 'fuel', 'output']) {
+    const el = furnaceGUI.querySelector(`.fitem[data-which="${which}"]`);
+    if (!el) continue;
+    const s = c[which];
+    if (s && s.count > 0) {
+      el.textContent = `${itemName(s.id)}×${s.count}`;
+      el.style.color = '#fff';
+      el.style.background = `#${(furnaceSlotColor(s.id) || 0x999999).toString(16).padStart(6, '0')}55`;
+    } else { el.textContent = '—'; el.style.background = 'transparent'; el.style.color = '#777'; }
+  }
+  const r = c.input && SMELTING_RECIPES[c.input.id] ? SMELTING_RECIPES[c.input.id] : null;
+  const frac = r ? Math.min(1, (c.progress || 0) / r.time) : 0;
+  const pbar = document.getElementById('furnace-progress');
+  if (pbar) pbar.style.width = `${Math.round(frac * 100)}%`;
+  const st = document.getElementById('furnace-status');
+  if (st) st.textContent = c.burning ? 'burning' : 'idle';
+  const hb = document.getElementById('furnace-hotbar');
+  if (hb) {
+    hb.innerHTML = '';
+    for (let i = 0; i < inventory.stacks.length; i += 1) {
+      const s = inventory.stacks[i];
+      const b = document.createElement('button');
+      b.className = 'fhslot'; b.dataset.i = String(i);
+      b.style.cssText = 'width:42px;height:42px;border:1px solid #666;border-radius:4px;background:#222;color:#fff;font-size:10px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.15;padding:2px';
+      b.title = `move to furnace (fuel items -> fuel, else -> input)`;
+      b.innerHTML = s.count > 0 ? `${itemName(s.id).slice(0, 10)}<span style="opacity:.8">×${s.count}</span>` : String(i + 1);
+      hb.appendChild(b);
+    }
+  }
+}
+
 function saveGame() {
   return saveToStorage(storage, buildSnapshot());
 }
@@ -1089,7 +1340,10 @@ function animate() {
   applyDamage(living, trackFall(living, dt, { airborne: !player.onGround, fallingSpeed: player.vel.y }), { type: 'environment' });
 
   // Death / respawn after a short delay.
-  if (!living.alive && respawnTimer <= 0) respawnTimer = 3.0;
+  if (!living.alive && respawnTimer <= 0) {
+    if (!didDropDeath) dropInventoryOnDeath();
+    respawnTimer = 3.0;
+  }
   if (!living.alive && respawnTimer > 0) {
     respawnTimer -= dt;
     if (respawnTimer <= 0) respawn();
@@ -1153,7 +1407,9 @@ function animate() {
     if (foodValue(sel.id) > 0 && living.hunger < living.maxHunger) {
       if (eatSelected(living, inventory)) refreshHeldItem();
     } else if (target) {
-      if (sel.id === TRIDENT_ID && sel.count > 0) {
+      if (target.id === FURNACE_ID) {
+        openFurnaceGUI(`${target.x},${target.y},${target.z}`);
+      } else if (sel.id === TRIDENT_ID && sel.count > 0) {
         if (playerTrident.cooldownLeft <= 0) {
           const dir = cameraDirection(player.yaw, player.pitch);
           const eye = { x: player.pos.x, y: player.pos.y + P.eyeHeight, z: player.pos.z };
@@ -1271,7 +1527,9 @@ function animate() {
   if (day < 0.15) sky = skyNight.clone().lerp(skyDay, day / 0.15);
   else if (day < 0.55) sky = skyDawn.clone().lerp(skyDay, (day - 0.15) / 0.4);
   else sky = skyDay.clone().lerp(skyNight, (day - 0.55) / 0.45);
-  scene.background.copy(sky);
+  // R-02: sky gradient driven by the day/night sky colour; a flat backdrop
+  // would read as one dominating colour band around the horizon.
+  setSkyGradient(sky);
   scene.fog.color.copy(sky);
 
   // B4: advance all crops by this frame's sim-time under current daylight.
@@ -1280,6 +1538,18 @@ function animate() {
   const vis = underwaterVisibility(320, underWater);
   scene.fog = new THREE.FogExp2(new THREE.Color(vis.tint[0], vis.tint[1], vis.tint[2]), vis.factor > 0.4 ? 0.008 : 0.05);
   if (underWater) scene.background = new THREE.Color(vis.tint[0], vis.tint[1], vis.tint[2]);
+  else scene.background = SKY_GRAD.tex;
+
+  // R-08: run every furnace on world ticks (the focused one is kept live; any
+  // burning one keeps smelting even with the GUI closed / across reloads).
+  const fTicks = Math.max(1, Math.round(dt * WORLD.tickRateHz));
+  for (const key of Object.keys(worldContainers)) {
+    const c = worldContainers[key];
+    if (c && (c.burning || key === activeFurnaceKey)) {
+      tickFurnace(c, fTicks);
+    }
+  }
+  if (activeFurnaceKey) renderFurnaceGUI();
 
   // B7: periodic autosave (every ~5s) — tab-close persistence.
   autosaveAccum += dt;
@@ -1317,4 +1587,4 @@ window.addEventListener('keydown', (e) => {
 });
 
 hudState.textContent =
-  `seed=${seed} · generating world… · click to capture mouse · LMB mine · RMB place/eat · 1-9/wheel select · B recipes · F sleep`;
+  `seed=${seed} · generating world… · click to capture mouse · LMB mine · RMB place/eat · 1-9/wheel select · E inventory · B recipes · F sleep`;
