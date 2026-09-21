@@ -294,3 +294,21 @@ valid save. The client saves on a ~5s autosave, `beforeunload`, and
   fish, a fish-bucket RMB releases it; `T` cycles trident enchants; HUD shows
   trident enchant/durability and aquatic mob count. Build clean, `npm test`
   113/113 (26 new B6).
+## B8 — Performance sampling (crit 19)
+
+- **Harness** (`perf/measure.mjs`): headless-Chromium measurement of the
+  production build. Scene = view-distance 6 chunks + 30 forced live mobs
+  (`?perf=1` hook in main.js). Samples per-frame rAF deltas (steady-state,
+  after chunk-build/spawn warm-up) and OS RSS of the Chromium process tree
+  (headless Chromium stubs `performance.memory`). Run:
+  `node perf/measure.mjs [seconds] [outDir]`.
+- **Instrumentation** (`src/main.js`): a `?perf=1`-only per-frame sampler
+  (rolls a 6000-frame window, exposes `window.__test12Perf`), plus a
+  `window.__test12ForceMobs(n)` hook to make the 30-entity scenario
+  reproducible. Normal play is completely untouched (perf flag absent).
+- **Optimizations** that raised steady-state FPS well above target:
+  linear fog (`THREE.Fog`) instead of per-fragment exponential fog
+  (`FogExp2`), and MSAA disabled (`powerPreference: 'high-performance'`).
+  Both are visually near-identical and cheaper on low-end GPUs.
+- **Result (300 s)**: avg 32.8 FPS, P95 34.8 ms, 0 errors, RSS Δ −115.8 MB
+  (no unbounded growth). Raw data in `perf/results/` + `perf/README.md`.
