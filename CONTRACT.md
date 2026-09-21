@@ -261,3 +261,26 @@ in `src/core/*`) rather than living only in one agent's private memory.
   the chest drops a mineable reward (coral + prismarine + diamond).
 - **Integration**: `src/main.js` applies ocean structures per loaded chunk,
   draws O2/HP bars in the HUD, and switches fog/background underwater.
+
+## B6 — Aquatic mobs & trident (crit 16, 17)
+
+- **Item ids (blocks.js, ids 220..231)**: cod(220), salmon(221),
+  tropical_fish(222), pufferfish_item(223), water_bucket(224),
+  cod_bucket(225), salmon_bucket(226), tropical_fish_bucket(227),
+  pufferfish_bucket(228). Empty bucket = 112 (base); trident = 115 (base).
+- **Aquatic mobs (`src/core/aquatic.js`)**: dolphin / cod / salmon / tropical
+  fish / pufferfish with spawn (deterministic over water cells), swim/wander,
+  out-of-water flop->death, hurt/death drops, and pufferfish inflate state that
+  visibly grows near the player and deals contact damage. Bucket capture
+  (empty bucket -> "bucket of <fish>") and release (fish bucket -> mob spawn).
+- **Trident (`src/core/trident.js`)**: throw/return/durability/damage with four
+  enchants — Loyalty (returns after flight), Riptide (returns instantly +
+  propels), Channeling (lightning bolt on thunder aquatic hit), Impaling
+  (+2.5/level vs aquatic). All four implemented; at least 3 required by the
+  criterion. Deterministic flight/hit/return scenarios are unit-tested.
+- **Integration** (`src/main.js`): nearby aquatic mobs spawn in ocean, swim and
+  puff each frame, rendered as colored boxes; pufferfish contact damage drains
+  health; holding a trident RMB throws it, empty bucket RMB captures a near
+  fish, a fish-bucket RMB releases it; `T` cycles trident enchants; HUD shows
+  trident enchant/durability and aquatic mob count. Build clean, `npm test`
+  113/113 (26 new B6).

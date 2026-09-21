@@ -32,6 +32,12 @@ import { weaponStats, resolveMelee, armorReduction, armorSlot, COMBAT } from './
 import { createAir, stepAir, headInWater, underwaterVisibility, isUnderwaterCell, breakUnderwater, drowningDamage } from './core/water.js';
 import { applyStructures, treasureLoot, revealTreasure } from './core/structures.js';
 import { DIFFICULTY } from './core/world.js';
+// B6 aquatic mobs + trident (crit 16/17)
+import {
+  stepMob as stepMobAquatic, mobInWater, captureWithBucket, releaseFromBucket, hurtMob,
+  pufferContactDamage, spawnMobs, mobName, FISH_BUCKET, EMPTY_BUCKET, WATER_BUCKET, MOB_SPECS,
+} from './core/aquatic.js';
+import { createTrident, throwTrident, stepTrident, tickCooldown, consumeDurability, describeEnchants, TRIDENT_ID, TRIDENT } from './core/trident.js';
 
 // Recipe book UI (toggle with B)
 const recipePanel = document.getElementById('recipe-book');
@@ -126,6 +132,8 @@ inventory.add(216, 1); // wooden_hoe
 inventory.add(220, 12); // wheat_seeds
 inventory.add(221, 4); // carrot (plantable + edible)
 inventory.add(222, 4); // potato (plantable + edible)
+inventory.add(112, 2); // empty buckets (B6 bucket capture)
+inventory.add(TRIDENT_ID, 1); // trident (B6 crit 17 demo)
 refreshHeldItem();
 
 // ---------- survival state (B2) ----------
@@ -586,6 +594,82 @@ function renderDrops() {
   }
 }
 
+// ---------- B6 aquatic mobs (crit 16) ----------
+const aquaticMobs = [];
+const mobGeoAquatic = new THREE.BoxGeometry(0.7, 0.5, 0.5);
+const mobMatCacheAquatic = new Map();
+function mobMaterialAquatic(color) {
+  if (!mobMatCacheAquatic.has(color)) {
+    mobMatCacheAquatic.set(color, new THREE.MeshLambertMaterial({ color }));
+  }
+  return mobMatCacheAquatic.get(color);
+}
+const mobMeshesAquatic = new Map(); // mob -> Mesh
+function spawnNearbyMobs() {
+  // Add a few aquatic mobs if none are near, sampled from nearby ocean cells.
+  if (aquaticMobs.filter((m) => m.alive).length >= 12) return;
+  const rng = Math.random;
+  const mobs = spawnMobs(world, player.pos.x - 24, player.pos.x + 24, 34, 50, player.pos.z - 24, player.pos.z + 24, 6, rng);
+  for (const m of mobs) aquaticMobs.push(m);
+}
+function renderAquaticMobs() {
+  for (const mob of aquaticMobs) {
+    if (!mob.alive) {
+      const mesh = mobMeshesAquatic.get(mob);
+      if (mesh) { mesh.visible = false; }
+      continue;
+    }
+    let mesh = mobMeshesAquatic.get(mob);
+    if (!mesh) {
+      const spec = MOB_SPECS[mob.type];
+      mesh = new THREE.Mesh(mobGeoAquatic, mobMaterialAquatic(spec.color));
+      scene.add(mesh);
+      mobMeshesAquatic.set(mob, mesh);
+    }
+    const spec = MOB_SPECS[mob.type];
+    // pufferfish visibly grows when puffed (crit 16 visible state)
+    const scale = mob.type === 'pufferfish'
+      ? (spec.normalSize + (spec.puffedSize - spec.normalSize) * mob.puff) / spec.normalSize
+      : 1;
+    mesh.scale.set(scale, scale, scale);
+    mesh.position.set(mob.x, mob.y, mob.z);
+    mesh.visible = true;
+  }
+}
+
+// ---------- B6 trident projectile (crit 17) ----------
+const tridentProjects = [];
+const tridentProjMesh = new THREE.Mesh(
+  new THREE.BoxGeometry(0.12, 0.12, 0.7),
+  new THREE.MeshLambertMaterial({ color: 0x7fd8d8 }),
+);
+scene.add(tridentProjMesh);
+function stepTridentProjectiles(dt) {
+  const alive = [];
+  for (const proj of tridentProjects) {
+    if (!proj.alive) continue;
+    const events = stepTrident(proj, world, aquaticMobs, dt, { raining: false, thundering: false });
+    if (events.hitMob) {
+      hurtMob(events.hitMob, events.damage);
+    }
+    if (proj.alive) alive.push(proj);
+  }
+  tridentProjects.length = 0;
+  for (const p of alive) tridentProjects.push(p);
+  // show the (single, first) active projectile for a lightweight in-world cue
+  tridentProjMesh.visible = false;
+  for (const proj of tridentProjects) {
+    if (proj.alive) { tridentProjMesh.visible = true; tridentProjMesh.position.set(proj.x, proj.y, proj.z); break; }
+  }
+}
+
+// Hold a player trident + bucket state for B6 interactions.
+// Channeling+Impaling+Impaling are on by default so the in-game trident shows
+// bonus vs aquatic damage and thunder bolts; Loyalty/Riptide demo via keys.
+let playerTrident = createTrident({ channeling: 1, impaling: 2 });
+let tridentEnchantDemo = 'impaling'; // toggles between impaling/channeling/loyalty/riptide
+
+
 // ---------- input wiring (A4 additions on top of A3 movement input) ----------
 let lmb = false;
 let useRequest = false;
@@ -772,6 +856,15 @@ function drawHUD() {
   ctx.fillText(`difficulty ${difficulty}${night ? ' · hostiles active' : ''}`, w - 14, 38);
   ctx.fillStyle = 'rgba(255,255,255,0.6)';
   ctx.fillText(`spawn ${Math.round(spawnPoint.x)},${Math.round(spawnPoint.y)},${Math.round(spawnPoint.z)} · deaths ${deaths}`, w - 14, 54);
+  // B6: trident enchant + aquatic readout (crit 16/17 HUD)
+  if (sel.id === TRIDENT_ID) {
+    ctx.fillStyle = 'rgba(140,255,220,0.95)';
+    ctx.fillText(`trident [${tridentEnchantDemo}] ${describeEnchants(playerTrident.enchants)} · dur ${playerTrident.durability}`, 14, h - 30);
+    ctx.fillText(`T cycles enchant; RMB throws`, 14, h - 46);
+  }
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  const mobAlive = aquaticMobs.filter((m) => m.alive).length;
+  ctx.fillText(`aquatic mobs ${mobAlive} · empty bucket RMB captures fish · fish bucket RMB releases`, 14, h - 76);
 
   // B5: treasure map reveal — holding a map points to the nearest buried
   // treasure (crit 15 in-game reveal action).
@@ -892,18 +985,66 @@ function animate() {
   prevLmb = lmb;
   breakingFraction = breaking.progressOf(target);
 
-  // Use / interact (RMB): eat food if the selected slot is food, else farming, else place.
+  // B6 aquatic mobs (crit 16): spawn near ocean, step swim/puff, hurt player.
+  spawnNearbyMobs();
+  for (const mob of aquaticMobs) {
+    stepMobAquatic(mob, world, dt, player.pos);
+    const contact = pufferContactDamage(mob, player.pos, 1.2);
+    if (contact > 0) playerHealth = Math.max(0, playerHealth - contact);
+  }
+
+  // B6 trident projectile flight (crit 17).
+  tickCooldown(playerTrident, dt);
+  stepTridentProjectiles(dt);
+
+  // Use / interact (RMB): eat food, farm, throw trident, capture/release fish, else place.
   if (useRequest && !lmb && input.isLocked()) {
     useRequest = false;
     const sel = inventory.selectedStack();
     if (foodValue(sel.id) > 0 && living.hunger < living.maxHunger) {
       if (eatSelected(living, inventory)) refreshHeldItem();
-    } else if (target && !useSelected(target)) {
-      placeAt(target);
+    } else if (target) {
+      if (sel.id === TRIDENT_ID && sel.count > 0) {
+        if (playerTrident.cooldownLeft <= 0) {
+          const dir = cameraDirection(player.yaw, player.pitch);
+          const eye = { x: player.pos.x, y: player.pos.y + P.eyeHeight, z: player.pos.z };
+          const proj = throwTrident(playerTrident, eye, dir, { raining: false, thundering: false });
+          if (proj) tridentProjects.push(proj);
+          playerTrident.cooldownLeft = TRIDENT.cooldown;
+          consumeDurability(playerTrident);
+        }
+      } else if (sel.id === EMPTY_BUCKET && sel.count > 0) {
+        const eye = { x: player.pos.x, y: player.pos.y + P.eyeHeight, z: player.pos.z };
+        let nearest = null, best = 9;
+        for (const mob of aquaticMobs) {
+          if (!mob.alive) continue;
+          const d = Math.hypot(mob.x - eye.x, mob.y - eye.y, mob.z - eye.z);
+          if (d < best) { best = d; nearest = mob; }
+        }
+        if (nearest) {
+          const bucketItem = captureWithBucket(nearest);
+          if (bucketItem != null) {
+            inventory.takeSelected(1);
+            inventory.add(bucketItem, 1);
+            refreshHeldItem();
+          }
+        }
+      } else if (FISH_BUCKET && Object.values(FISH_BUCKET).includes(sel.id) && sel.count > 0) {
+        const px = target.nx, py = target.ny, pz = target.nz;
+        if (world.isLiquid(px, py, pz) || true) {
+          const mob = releaseFromBucket(sel.id, px + 0.5, py + 0.5, pz + 0.5, Math.random);
+          if (mob) {
+            aquaticMobs.push(mob);
+            inventory.takeSelected(1);
+            inventory.add(EMPTY_BUCKET, 1);
+            refreshHeldItem();
+          }
+        }
+      } else if (!useSelected(target)) {
+        placeAt(target);
+      }
     }
   }
-
-  // Drops: physics + pickup into inventory.
   for (const d of drops) {
     if (d.alive) stepDrop(d, world, dt);
     if (d.alive && canPickup(d, player.pos)) {
@@ -914,6 +1055,8 @@ function animate() {
     }
   }
   renderDrops();
+  renderMobs();
+  renderAquaticMobs();
 
   // --- B3 mobs: step AI, creeper explosions, melee attacks ---
   if (meleeCooldown > 0) meleeCooldown -= dt;
@@ -1005,6 +1148,20 @@ animate();
 
 // toggle recipe book with B
 window.addEventListener('keydown', (e) => { if (e.code === 'KeyB') recipePanel.hidden = !recipePanel.hidden; });
+
+// B6: cycle trident enchants with T (demo all four: Loyalty/Riptide/Channeling/Impaling).
+const ENCHANT_CYCLE = ['loyalty', 'riptide', 'channeling', 'impaling'];
+window.addEventListener('keydown', (e) => {
+  if (e.code !== 'KeyT') return;
+  const next = (ENCHANT_CYCLE.indexOf(tridentEnchantDemo) + 1) % ENCHANT_CYCLE.length;
+  tridentEnchantDemo = ENCHANT_CYCLE[next];
+  const ench = { loyalty: 0, riptide: 0, channeling: 0, impaling: 0 };
+  if (tridentEnchantDemo === 'loyalty') ench.loyalty = 3;
+  else if (tridentEnchantDemo === 'riptide') ench.riptide = 1;
+  else if (tridentEnchantDemo === 'channeling') ench.channeling = 1;
+  else if (tridentEnchantDemo === 'impaling') ench.impaling = 3;
+  playerTrident = createTrident(ench);
+});
 
 hudState.textContent =
   `seed=${seed} · generating world… · click to capture mouse · LMB mine · RMB place/eat · 1-9/wheel select · B recipes · F sleep`;
