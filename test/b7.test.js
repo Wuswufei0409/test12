@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 import {
   serializeSave, parseSave, restoreSnapshot, roundTrip,
   loadStoredSave, saveToStorage, createMemoryStore, SAVE_KEY, SAVE_FORMAT,
+  applyContainers,
 } from '../src/core/save.js';
 
 // A representative full snapshot covering every crit-18 state: seed, player
@@ -117,6 +118,26 @@ describe('save/load persistence (crit 18)', () => {
   it('restoreSnapshot returns null for an unsuccessful parse', () => {
     expect(restoreSnapshot(parseSave('garbage'))).toBe(null);
     expect(restoreSnapshot(null)).toBe(null);
+  });
+
+  it('applyContainers restores chest/furnace contents onto the live container map at boot (crit 18)', () => {
+    // Simulate the client boot-restore path: build a full snapshot, round-trip it
+    // through serialize/restore, then rebind the restored containers onto the
+    // live worldContainers object (as restoreGame does with applyContainers).
+    const res = roundTrip(fullSnapshot());
+    expect(res.ok).toBe(true);
+    const s = res.snap;
+
+    // A live container map that may already hold stale/placeholder entries.
+    const live = { '0,0,0': { inventory: { stacks: [[0, 0]] } } };
+    const out = applyContainers(live, s.containers);
+
+    // Restored contents replace prior state (no silent merge of stale keys).
+    expect(out).toBe(live);
+    expect(out['12,60,-8']).toEqual({ inventory: { stacks: [[0, 0], [105, 2]] } });
+    expect(out['13,60,-8'].input).toEqual([12, 1]);
+    expect(out['13,60,-8'].fuel).toEqual([111, 3]);
+    expect(out['0,0,0']).toBeUndefined();
   });
 
   it('persists to a real storage and survives an explicit reload', () => {

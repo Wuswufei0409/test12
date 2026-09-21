@@ -29,7 +29,7 @@ import { createLiving, eatSelected, tickMetabolism, applyDamage, trackFall, food
 import { MOBS, createMob, stepMob, damageMob, mobDrops, groundHeight, MOB_HEIGHT } from './core/mobs.js';
 import { explode } from './core/explosion.js';
 import { weaponStats, resolveMelee, armorReduction, armorSlot, COMBAT } from './core/combat.js';
-import { loadStoredSave, saveToStorage, restoreSnapshot } from './core/save.js';
+import { loadStoredSave, saveToStorage, restoreSnapshot, applyContainers } from './core/save.js';
 import { createMemoryStore } from './core/save.js';
 
 // Recipe book UI (toggle with B)
@@ -837,6 +837,9 @@ function restoreGame() {
   for (const d of s.drops) drops.push(d);
   mobs.length = 0;
   for (const m of s.mobs) mobs.push(m);
+  // Chest/furnace container contents must survive a reload too (crit 18):
+  // replace the live worldContainers from the saved state before gameplay resumes.
+  applyContainers(worldContainers, s.containers);
   refreshHeldItem();
 }
 restoreGame();

@@ -202,3 +202,17 @@ export function createMemoryStore(initial = {}) {
     _map: map,
   };
 }
+
+/**
+ * Copy a container-state map (keyed by "x,y,z") onto a live target object,
+ * replacing its previous contents. Used by the client during boot restore so
+ * chest/furnace contents survive a reload (crit 18). Pure + testable.
+ */
+export function applyContainers(target, containers) {
+  const dest = target || {};
+  for (const k of Object.keys(dest)) delete dest[k];
+  if (containers && typeof containers === 'object') {
+    for (const k of Object.keys(containers)) dest[k] = containers[k];
+  }
+  return dest;
+}
