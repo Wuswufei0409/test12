@@ -38,6 +38,8 @@ import {
   pufferContactDamage, spawnMobs, mobName, FISH_BUCKET, EMPTY_BUCKET, WATER_BUCKET, MOB_SPECS,
 } from './core/aquatic.js';
 import { createTrident, throwTrident, stepTrident, tickCooldown, consumeDurability, describeEnchants, TRIDENT_ID, TRIDENT } from './core/trident.js';
+import { loadStoredSave, saveToStorage, restoreSnapshot, applyContainers } from './core/save.js';
+import { createMemoryStore } from './core/save.js';
 
 // Recipe book UI (toggle with B)
 const recipePanel = document.getElementById('recipe-book');
@@ -919,6 +921,90 @@ function onResize() {
 }
 window.addEventListener('resize', onResize);
 
+// ---------- B7 persistence (crit 18): build a snapshot of all durable state ----------
+const storage = typeof window !== 'undefined' && window.localStorage ? window.localStorage : createMemoryStore();
+function buildSnapshot() {
+  return {
+    seed,
+    worldTime,
+    difficulty,
+    player: player, // pos/yaw/pitch/vel (mutated live)
+    living,
+    spawnPoint,
+    deaths,
+    inventory: {
+      selected: inventory.selected,
+      stacks: inventory.stacks.map((s) => ({ id: s.id, count: s.count })),
+    },
+    equipped,
+    worldEdits: Array.from(world.edits.entries()),
+    containers: worldContainers,
+    drops: drops.filter((d) => d.alive).map((d) => ({ ...d })),
+    mobs: mobs.filter((m) => m.alive).map((m) => ({ ...m })),
+  };
+}
+// Active chest/furnace container state keyed by "x,y,z" (block edits persist the
+// blocks themselves; this holds their contents). Client may populate as needed.
+const worldContainers = {};
+function saveGame() {
+  return saveToStorage(storage, buildSnapshot());
+}
+
+// Boot-time restore: resume after tab close, without silently overwriting a
+// valid save on corrupt/missing data (crit 18).
+function restoreGame() {
+  const loaded = loadStoredSave(storage);
+  if (!loaded.ok) {
+    if (loaded.kind === 'corrupt' || loaded.kind === 'invalid') {
+      // Clear error + safe fallback to a fresh world; leave the blob on disk
+      // so a future repair never destroys the player's data.
+      console.error(`[save] ${loaded.reason} — starting a fresh world (existing save preserved)`);
+      hudState.textContent = `SAVE ERROR: ${loaded.reason} — started fresh; do NOT overwrite your save.`;
+    }
+    return;
+  }
+  const s = restoreSnapshot(loaded);
+  if (!s) return;
+  // Rebuild the shared world from the saved seed + edit overlay.
+  world.seed = s.seed;
+  world.edits = s.worldEdits;
+  // Restore player position + orientation + velocity.
+  player.pos.x = s.player.pos.x; player.pos.y = s.player.pos.y; player.pos.z = s.player.pos.z;
+  player.yaw = s.player.yaw; player.pitch = s.player.pitch;
+  player.vel.x = s.player.vel.x; player.vel.y = s.player.vel.y; player.vel.z = s.player.vel.z;
+  // Inventory stacks + selected slot + equipped armor.
+  if (Array.isArray(s.inventory.stacks)) {
+    for (let i = 0; i < inventory.stacks.length && i < s.inventory.stacks.length; i++) {
+      inventory.stacks[i].id = s.inventory.stacks[i].id;
+      inventory.stacks[i].count = s.inventory.stacks[i].count;
+    }
+    inventory.selected = s.inventory.selected;
+  }
+  equipped = s.equipped || [];
+  // Survival + time + difficulty + spawn.
+  Object.assign(living, s.living);
+  worldTime = s.worldTime || 0;
+  difficulty = s.difficulty || 'normal';
+  deaths = s.deaths || 0;
+  spawnPoint = s.spawnPoint || spawnPoint;
+  // Drops + mobs entities.
+  drops.length = 0;
+  for (const d of s.drops) drops.push(d);
+  mobs.length = 0;
+  for (const m of s.mobs) mobs.push(m);
+  // Chest/furnace container contents must survive a reload too (crit 18):
+  // replace the live worldContainers from the saved state before gameplay resumes.
+  applyContainers(worldContainers, s.containers);
+  refreshHeldItem();
+}
+restoreGame();
+
+// Autosave every few seconds and on tab close / hide, so progress survives a
+// tab close (crit 18: resume after tab close).
+let autosaveAccum = 0;
+window.addEventListener('beforeunload', () => saveGame());
+document.addEventListener('visibilitychange', () => { if (document.hidden) saveGame(); });
+
 // ---------- main loop ----------
 let elapsed = 0;
 let lastUpdate = performance.now();
@@ -1131,6 +1217,10 @@ function animate() {
   const vis = underwaterVisibility(320, underWater);
   scene.fog = new THREE.FogExp2(new THREE.Color(vis.tint[0], vis.tint[1], vis.tint[2]), vis.factor > 0.4 ? 0.008 : 0.05);
   if (underWater) scene.background = new THREE.Color(vis.tint[0], vis.tint[1], vis.tint[2]);
+
+  // B7: periodic autosave (every ~5s) — tab-close persistence.
+  autosaveAccum += dt;
+  if (autosaveAccum >= 5) { autosaveAccum = 0; saveGame(); }
 
   renderer.render(scene, camera);
   drawHUD();

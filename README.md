@@ -76,6 +76,17 @@ See **Known limits** below.
 5. Performance benchmark (standard 19) not yet measured in a full survival
    session.
 
+## Persistence (B7, crit 18)
+
+- The client autosaves every ~5s and on tab close / tab hide (`beforeunload`,
+  `visibilitychange`) to `localStorage` (`test12.save.v2`), covering seed, player
+  position + state, living stats, inventory + equipped armor, world time,
+  modified-block overlay, chest/furnace containers, drops, and mobs.
+- On load it resumes exactly where you left off after a tab close.
+- Corrupt/missing saves are never silently overwritten: they surface a clear
+  status/console error and start a fresh world, preserving the existing blob.
+- Save format is versioned in `src/core/save.js` (additive; see CONTRACT §6).
+
 ## License & assets
 
 - Code: MIT (see `LICENSE`).
