@@ -18,6 +18,33 @@
       #recipe-book ul { margin: 6px 0 0; padding-left: 18px; }
       #recipe-book li { margin: 2px 0; }
       #recipe-book b { color: #ffe066; }
+
+      /* Phase C full-inventory panel (crit 06) */
+      #inventory-panel {
+        position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+        z-index: 30; width: 520px; max-width: 96vw;
+        background: rgba(20, 24, 34, 0.95); border: 1px solid rgba(255,255,255,0.25);
+        border-radius: 8px; padding: 12px 14px; color: #fff;
+        font-family: system-ui, sans-serif; user-select: none;
+        box-shadow: 0 6px 24px rgba(0,0,0,0.5);
+      }
+      #inventory-panel .panel-title { font-weight: bold; font-size: 15px; color: #ffe066; margin-bottom: 6px; }
+      #inventory-panel .panel-hint { margin-top: 8px; font-size: 11px; color: #aab; }
+      #inventory-panel .inv-sec-label { font-size: 11px; color: #aab; margin: 8px 0 4px; }
+      #inventory-panel .inv-grid { display: grid; grid-template-columns: repeat(9, 1fr); gap: 6px; }
+      #inventory-panel .inv-grid + .inv-grid { margin-top: 10px; }
+      #inventory-panel .inv-slot {
+        height: 52px; background: rgba(0,0,0,0.42);
+        border: 1px solid rgba(255,255,255,0.3); border-radius: 4px;
+        cursor: pointer; position: relative; overflow: hidden;
+      }
+      #inventory-panel .inv-slot:hover { border-color: rgba(255,255,255,0.7); }
+      #inventory-panel .slot-empty { display: block; width: 100%; height: 100%; }
+      #inventory-panel .slot-fill { position: absolute; inset: 3px; border-radius: 3px; }
+      #inventory-panel .slot-name { position: absolute; left: 4px; right: 4px; bottom: 14px; font-size: 9px; line-height: 1.05; text-align: center; text-shadow: 0 1px 2px #000; word-break: break-word; }
+      #inventory-panel .slot-count { position: absolute; right: 4px; bottom: 2px; font-size: 12px; text-shadow: 0 1px 2px #000; }
+      #inventory-panel .slot-sel { position: absolute; inset: 0; border: 2px solid #ffe066; border-radius: 3px; pointer-events: none; }
+      #inventory-panel .slot-grab { position: absolute; inset: 0; border: 2px dashed #fff; border-radius: 3px; pointer-events: none; }
     </style>
   </head>
   <body>

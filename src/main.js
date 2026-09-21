@@ -14,7 +14,9 @@ import { createPlayer, PLAYER as P } from './core/physics.js';
 import { createInput, createPlayerLoop, syncCamera } from './player.js';
 import { raycastBlock, cameraDirection } from './core/targeting.js';
 import { Breaking } from './core/breaking.js';
-import { createInventory, itemName, stackCapacity } from './core/inventory.js';
+import { createInventory, itemName, stackCapacity, HOTBAR_SIZE, INVENTORY_SIZE } from './core/inventory.js';
+import { spillInventory } from './core/death.js';
+import { createInventoryPanel } from './client/inventoryUI.js';
 import { dropForBlock, createDrop, stepDrop, canPickup } from './core/drops.js';
 import { getBlockById, BLOCKS, ITEMS } from './core/blocks.js';
 import { isHoeItem } from './core/items.js';
@@ -127,7 +129,7 @@ function refreshHeldItem() {
 }
 
 // ---------- inventory / hotbar (A4) ----------
-const inventory = createInventory(9);
+const inventory = createInventory(INVENTORY_SIZE); // 9 hotbar + 27 storage (crit 06)
 // Small starter kit so a tester can immediately place/survive.
 inventory.add(1, 8); // stone
 inventory.add(7, 8); // planks
@@ -141,6 +143,26 @@ inventory.add(222, 4); // potato (plantable + edible)
 inventory.add(112, 2); // empty buckets (B6 bucket capture)
 inventory.add(TRIDENT_ID, 1); // trident (B6 crit 17 demo)
 refreshHeldItem();
+
+// ---------- full-inventory UI (Phase C rework, crit 06) ----------
+let inventoryOpen = false;
+function acquirePointerLock() {
+  if (!document.pointerLockElement) renderer.domElement.requestPointerLock();
+}
+function releasePointerLock() {
+  if (document.pointerLockElement) document.exitPointerLock();
+}
+const inventoryPanel = createInventoryPanel(inventory, {
+  onToggleLock(open) {
+    inventoryOpen = open;
+    window.__inventoryOpen = open;
+    if (open) releasePointerLock();
+    else setTimeout(acquirePointerLock, 0);
+  },
+  onChanged() { refreshHeldItem(); },
+});
+// E toggles the full inventory screen (crit 06).
+window.addEventListener('keydown', (e) => { if (e.code === 'KeyE') inventoryPanel.toggle(); });
 
 // ---------- survival state (B2) ----------
 const living = createLiving();
@@ -517,6 +539,20 @@ function placeAt(hit) {
 }
 
 // ---------- survival helpers (B2): death / respawn / sleep ----------
+let didDropDeath = false;
+// On death, drop the player's full inventory as world drops at the death
+// location, clear the inventory, and show a visible message (crit 06).
+function dropInventoryOnDeath() {
+  const dropped = spillInventory(inventory);
+  for (const d of dropped) {
+    drops.push(createDrop(player.pos.x, player.pos.y, player.pos.z, d.id, d.count));
+  }
+  refreshHeldItem();
+  sleepingMsg = 'You died — inventory dropped at death point';
+  sleepMsgTimer = 4;
+  didDropDeath = true;
+}
+
 function respawn() {
   Object.assign(living, createLiving());
   deaths += 1;
@@ -524,6 +560,7 @@ function respawn() {
   player.pos.y = spawnPoint.y;
   player.pos.z = spawnPoint.z;
   player.vel.y = 0;
+  didDropDeath = false;
   sleepingMsg = 'You died — respawned at spawn point';
   sleepMsgTimer = 3;
 }
@@ -680,6 +717,7 @@ let tridentEnchantDemo = 'impaling'; // toggles between impaling/channeling/loya
 let lmb = false;
 let useRequest = false;
 document.addEventListener('mousedown', (e) => {
+  if (inventoryOpen) return;
   if (e.button === 0) lmb = true;
   if (e.button === 2) useRequest = true;
 });
@@ -692,7 +730,7 @@ document.addEventListener('contextmenu', (e) => e.preventDefault());
 window.addEventListener('keydown', (e) => {
   if (e.code.startsWith('Digit')) {
     const n = Number(e.code.slice(5));
-    if (n >= 1 && n <= inventory.size) {
+    if (n >= 1 && n <= HOTBAR_SIZE) {
       inventory.select(n - 1);
       refreshHeldItem();
     }
@@ -715,7 +753,7 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('wheel', (e) => {
   const delta = Math.sign(e.deltaY);
-  inventory.select((inventory.selected + delta + inventory.size) % inventory.size);
+  inventory.select((inventory.selected + delta + HOTBAR_SIZE) % HOTBAR_SIZE);
   refreshHeldItem();
 });
 
@@ -753,7 +791,7 @@ function drawHUD() {
   // Hotbar (9 real inventory slots)
   const slotSize = 42;
   const gap = 4;
-  const n = inventory.size;
+  const n = HOTBAR_SIZE; // the in-world hotbar shows only the 9 hotbar slots
   const barW = n * slotSize + (n - 1) * gap;
   const bx = (w - barW) / 2;
   const by = h - slotSize - 14;
@@ -892,7 +930,7 @@ function drawHUD() {
     ctx.fillText(`target ${getBlockById(target.id).name}${Math.abs(breakingFraction) > 0.02 ? ` · breaking ${Math.round(breakingFraction * 100)}%` : ''}`, 14, h - 90);
   }
   if (!input.isLocked()) {
-    ctx.fillText('click to capture mouse · LMB mine · RMB eat/place · 1-9/wheel select · F sleep on bed', w / 2, h - 14);
+    ctx.fillText('click to capture mouse · LMB mine · RMB eat/place · 1-9/wheel select · E inventory · F sleep on bed', w / 2, h - 14);
     ctx.textAlign = 'center';
   }
 
@@ -1089,7 +1127,10 @@ function animate() {
   applyDamage(living, trackFall(living, dt, { airborne: !player.onGround, fallingSpeed: player.vel.y }), { type: 'environment' });
 
   // Death / respawn after a short delay.
-  if (!living.alive && respawnTimer <= 0) respawnTimer = 3.0;
+  if (!living.alive && respawnTimer <= 0) {
+    if (!didDropDeath) dropInventoryOnDeath();
+    respawnTimer = 3.0;
+  }
   if (!living.alive && respawnTimer > 0) {
     respawnTimer -= dt;
     if (respawnTimer <= 0) respawn();
@@ -1317,4 +1358,4 @@ window.addEventListener('keydown', (e) => {
 });
 
 hudState.textContent =
-  `seed=${seed} · generating world… · click to capture mouse · LMB mine · RMB place/eat · 1-9/wheel select · B recipes · F sleep`;
+  `seed=${seed} · generating world… · click to capture mouse · LMB mine · RMB place/eat · 1-9/wheel select · E inventory · B recipes · F sleep`;
