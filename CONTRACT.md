@@ -153,3 +153,24 @@ in `src/core/*`) rather than living only in one agent's private memory.
 - **Integration**: `src/main.js` wires A2 chunk streaming + A3 player loop + A4
   mechanics; mined/placed chunks (3x3 neighbourhood) rebuild their mesh from
   `WorldState` (`src/render/worldmesh.js`).
+
+## B5 — Water core & ocean content (crit 14, 15)
+
+- **Blocks/items**: ocean ids 36..41 (coral_block, coral_plant, kelp, seagrass,
+  iceberg, treasure_chest) and items 119..121 (treasure_map, coral,
+  prismarine_shard). ids are stable (persisted). Sources `src/core/blocks.js`,
+  `src/core/items.js`.
+- **Water mechanics** (`src/core/water.js`): head-in-water detection, oxygen
+  bar with underwater depletion / in-air regeneration, drowning damage once the
+  bar empties (scaled by difficulty), sprint-swim speed, reduced underwater
+  visibility, 1x1 waterway passability, buoyant drops (water drag + float-to-
+  surface), and underwater block breaks fill the cell with water (no erroneous
+  air pockets).
+- **Ocean worldgen** (`src/core/worldgen.js`): deterministic kelp/seagrass/coral
+  placement in the water column and iceberg shelves in cold oceans — additive,
+  does not change the land heightmap/fingerprint.
+- **Structures** (`src/core/structures.js`): per-(seed,chunk) deterministic
+  shipwrecks, underwater ruins and buried treasure; a treasure_map reveals and
+  the chest drops a mineable reward (coral + prismarine + diamond).
+- **Integration**: `src/main.js` applies ocean structures per loaded chunk,
+  draws O2/HP bars in the HUD, and switches fog/background underwater.

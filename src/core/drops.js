@@ -5,6 +5,7 @@
 // the item that drops so most blocks flow mine -> inventory -> place.
 import { getBlockById, BLOCKS, ITEMS } from './blocks.js';
 import { PLAYER } from './physics.js';
+import { buoyantVelocity } from './water.js';
 
 const bid = (name) => {
   const b = BLOCKS[name];
@@ -75,8 +76,18 @@ export function stepDrop(drop, world, dt) {
     return drop;
   }
 
+  // Water drag: buoyant items in water settle in place rather than drifting
+  // across the world (matches Minecraft buoyant-drop behaviour).
+  const inWaterNow =
+    typeof world.isLiquid === 'function' &&
+    world.isLiquid(Math.floor(drop.x), Math.floor(drop.y), Math.floor(drop.z));
+  if (inWaterNow) {
+    drop.vx *= 0.5;
+    drop.vz *= 0.5;
+  }
+
   // gravity + integrate horizontal
-  drop.vy -= GRAVITY * dt;
+  drop.vy = buoyantVelocity(drop, world, drop.vy, GRAVITY, dt);
   const nx = drop.x + drop.vx * dt;
   const ny = drop.y + drop.vy * dt;
   const nz = drop.z + drop.vz * dt;

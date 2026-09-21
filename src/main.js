@@ -20,6 +20,8 @@ import { getBlockById, BLOCKS, ITEMS } from './core/blocks.js';
 import { buildChunkMesh } from './render/worldmesh.js';
 import { getAtlasTexture, tileUV, TILES } from './render/atlas.js';
 import { recipeBook } from './core/crafting.js';
+import { createAir, stepAir, headInWater, underwaterVisibility, isUnderwaterCell, breakUnderwater } from './core/water.js';
+import { applyStructures } from './core/structures.js';
 
 // Recipe book UI (toggle with B)
 const recipePanel = document.getElementById('recipe-book');
@@ -57,6 +59,16 @@ scene.add(sun);
 
 // ---------- shared mutable world (A4) ----------
 const world = new WorldState(seed);
+
+// B5 air/oxygen meter (crit 14) — replenished in air, depletes underwater.
+const airState = createAir();
+let playerHealth = 20;
+
+// B5 ocean structures (crit 15) are derived from the same seed, so they are
+// stable per world; applying them as overlay edits keeps base terrain intact.
+function applyOceanStructures(cx, cz) {
+  applyStructures(world, seed, cx, cz);
+}
 
 // ---------- player (A3), spawned on land ----------
 const landSpawn = findLandSpawn(seed);
@@ -108,6 +120,7 @@ const LOAD_PER_FRAME = 3;
 const chunkKey = (cx, cz) => `${cx},${cz}`;
 
 function loadChunk(cx, cz) {
+  applyOceanStructures(cx, cz); // deterministic B5 ocean content (shipwreck/ruin/treasure)
   const geo = buildChunkMesh(world, cx, cz);
   const mesh = new THREE.Mesh(geo, solidMaterial());
   mesh.position.set(cx * CHUNK.size, 0, cz * CHUNK.size);
@@ -214,7 +227,9 @@ let mining = false;
 let placing = false;
 function breakAt(hit) {
   const dropId = dropForBlock(hit.id);
-  world.set(hit.x, hit.y, hit.z, 0);
+  // Underwater breaks fill the cell with water (no erroneous air pockets).
+  const underwater = isUnderwaterCell(world, hit.x, hit.y, hit.z);
+  world.set(hit.x, hit.y, hit.z, breakUnderwater(underwater));
   markEdited(hit.x, hit.y, hit.z);
   if (dropId != null) {
     const d = createDrop(hit.x, hit.y, hit.z, dropId);
@@ -382,6 +397,25 @@ function drawHUD() {
     }
   }
 
+  // B5: oxygen + health bars (top-left)
+  const barW2 = 150, barH2 = 9;
+  const bx2 = 14, by2 = 14;
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fillRect(bx2 - 3, by2 - 3, barW2 + 6, 26);
+  // oxygen bar
+  const oxFrac = airState.air / airState.max;
+  ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(bx2, by2, barW2, barH2);
+  ctx.fillStyle = oxFrac > 0.25 ? 'rgba(70,180,255,0.9)' : 'rgba(255,80,80,0.9)';
+  ctx.fillRect(bx2, by2, barW2 * oxFrac, barH2);
+  ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.font = '11px system-ui'; ctx.textAlign = 'left';
+  ctx.fillText('O2', bx2, by2 - 2);
+  // health bar
+  const hpFrac = playerHealth / 20;
+  ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(bx2, by2 + barH2 + 3, barW2, barH2);
+  ctx.fillStyle = hpFrac > 0.3 ? 'rgba(255,80,80,0.95)' : 'rgba(180,0,0,0.95)';
+  ctx.fillRect(bx2, by2 + barH2 + 3, barW2 * hpFrac, barH2);
+  ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.fillText('HP', bx2, by2 + barH2 + 3 - 2);
+
   // Selected-item readout
   const sel = inventory.selectedStack();
   const selName = sel.count > 0 ? itemName(sel.id) : 'empty';
@@ -422,6 +456,11 @@ function animate() {
   // Physics (A3) — WorldState collider includes player edits.
   loop(dt);
   syncCamera(camera, player);
+
+  // B5: oxygen meter + drowning (crit 14).
+  const underWater = headInWater(world, player.pos, P.eyeHeight);
+  const { drowning } = stepAir(airState, underWater, dt);
+  if (drowning > 0) playerHealth = Math.max(0, playerHealth - drowning);
 
   // Stream + rebuild chunks.
   updateChunks(player.pos);
@@ -474,6 +513,11 @@ function animate() {
   const sky = new THREE.Color().lerpColors(new THREE.Color(0x0b1026), new THREE.Color(0x87b5d9), blend);
   scene.background.copy(sky);
   scene.fog.color.copy(sky);
+
+  // B5: underwater visibility — shorter, blue-tinted fog when diving.
+  const vis = underwaterVisibility(320, underWater);
+  scene.fog = new THREE.FogExp2(new THREE.Color(vis.tint[0], vis.tint[1], vis.tint[2]), vis.factor > 0.4 ? 0.008 : 0.05);
+  if (underWater) scene.background = new THREE.Color(vis.tint[0], vis.tint[1], vis.tint[2]);
 
   renderer.render(scene, camera);
   drawHUD();

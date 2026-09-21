@@ -40,6 +40,13 @@ const REGISTRY = {
   prismarine: { id: 33, name: 'prismarine', solid: true, hardness: 1.5, color: 0x5aa88a },
   sea_lantern: { id: 34, name: 'sea_lantern', solid: true, hardness: 0.3, light: 15, color: 0xcdeee6 },
   barrier: { id: 35, name: 'barrier', solid: true, hardness: -1, unbreakable: true, color: 0xc03040 },
+  // --- B5 ocean blocks (ids 36..41; do not reorder — persisted in saves) ---
+  coral_block: { id: 36, name: 'coral_block', solid: true, hardness: 0.4, color: 0xe0668a },
+  coral_plant: { id: 37, name: 'coral_plant', solid: false, hardness: 0.1, color: 0xff6b8a },
+  kelp_block: { id: 38, name: 'kelp', solid: false, hardness: 0.1, color: 0x3c8a3c },
+  seagrass: { id: 39, name: 'seagrass', solid: false, hardness: 0.1, color: 0x5cab4c },
+  ice_berg: { id: 40, name: 'iceberg', solid: true, hardness: 0.6, color: 0xbfe7f5 },
+  treasure_chest: { id: 41, name: 'treasure_chest', solid: true, hardness: 2.5, color: 0x9a6a2a },
   wood_sword: { id: 100, name: 'wood_sword', item: true, stack: 1 },
   stone_sword: { id: 101, name: 'stone_sword', item: true, stack: 1 },
   iron_sword: { id: 102, name: 'iron_sword', item: true, stack: 1 },
@@ -59,6 +66,9 @@ const REGISTRY = {
   wooden_pickaxe: { id: 116, name: 'wooden_pickaxe', item: true, stack: 1 },
   stone_pickaxe: { id: 117, name: 'stone_pickaxe', item: true, stack: 1 },
   iron_pickaxe: { id: 118, name: 'iron_pickaxe', item: true, stack: 1 },
+  treasure_map: { id: 119, name: 'treasure_map', item: true, stack: 1 },
+  coral: { id: 120, name: 'coral', item: true, stack: 64 },
+  prismarine_shard_item: { id: 121, name: 'prismarine_shard_item', item: true, stack: 64 },
 };
 
 export const BLOCKS = Object.fromEntries(
